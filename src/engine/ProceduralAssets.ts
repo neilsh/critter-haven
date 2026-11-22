@@ -327,7 +327,8 @@ export class AudioSynth {
   private getContext(): AudioContext | null {
     if (this.ctx) return this.ctx;
     if (typeof window === 'undefined') return null;
-    const w = window as Window & { webkitAudioContext?: typeof AudioContext };
+    // The DOM typings do not expose AudioContext on Window, so describe the constructors we need.
+    const w = window as unknown as { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext };
     const Ctor = w.AudioContext ?? w.webkitAudioContext;
     if (!Ctor) return null;
     const ctx = new Ctor();
