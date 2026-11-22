@@ -27,8 +27,8 @@
  *  - Stretch of a block link = anchor-point separation + relative rotation angle * half a cell.
  *    Stretch of a strut = |length - rest length|. Strain ratio = stretch / (maxStress * stretchUnit),
  *    using the weaker material of the two pieces.
- *  - Hail stones are drawn as simple spheres added next to the block meshes (same parent), and
- *    removed again on stop().
+ *  - Hail stones are drawn as simple spheres under the effects root (see setEffectsRoot; Game
+ *    passes the scene) and removed again on stop(). With no root, hail is simulated but not drawn.
  */
 import type * as RapierModule from '@dimforge/rapier3d-compat';
 import type { ImpulseJoint, ImpulseJointSet, JointAxis, RigidBody, World } from '@dimforge/rapier3d-compat';
@@ -195,6 +195,7 @@ export class PhysicsSim {
   private run: SimRun | null = null;
   /** Bumped by start/stop so a slow Rapier init cannot resurrect a cancelled run. */
   private generation = 0;
+  private effectsRoot: THREE.Object3D | null = null;
 
   constructor(private events: PhysicsEvents = {}) {}
 
@@ -204,12 +205,20 @@ export class PhysicsSim {
     const gen = this.generation;
     const rapier = await loadRapier();
     if (gen !== this.generation) return; // stopped (or restarted) while Rapier was loading
-    this.run = new SimRun(rapier, graph, meshes, disaster, seed, () => this.events);
+    this.run = new SimRun(rapier, graph, meshes, disaster, seed, this.effectsRoot, () => this.events);
   }
 
   /** Replace event handlers (Game wires these after construction). */
   setEvents(events: PhysicsEvents): void {
     this.events = events;
+  }
+
+  /**
+   * Parent for meshes the sim creates itself (hail stones), in world space. Takes effect on the next
+   * start(); headless runs can leave it unset.
+   */
+  setEffectsRoot(root: THREE.Object3D | null): void {
+    this.effectsRoot = root;
   }
 
   /** Advance by a real frame delta (seconds); internally fixed-steps. */
@@ -319,7 +328,6 @@ class SimRun {
   private readonly struts: StrutRec[] = [];
   private readonly links: Link[] = [];
   private hail: Hail[] = [];
-  private readonly hailRoot: THREE.Object3D | null = null;
   private readonly hailGeom = new THREE.SphereGeometry(1, 12, 8);
   private readonly hailMat = new THREE.MeshStandardMaterial({
     color: 0xdff3ff,
@@ -352,6 +360,7 @@ class SimRun {
     meshes: MeshRegistry,
     private readonly disaster: DisasterType,
     seed: number,
+    private readonly hailRoot: THREE.Object3D | null,
     private readonly events: () => PhysicsEvents,
   ) {
     const world = new this.R.World({ x: 0, y: -T.gravity, z: 0 });
@@ -385,10 +394,6 @@ class SimRun {
         }
       : { minX: -4, maxX: 4, minZ: -4, maxZ: 4, top: 0 };
 
-    if (disaster === 'hail') {
-      const first = meshes.blocks.values().next().value ?? meshes.struts.values().next().value;
-      this.hailRoot = first?.parent ?? null;
-    }
     if (disaster === 'flood') {
       this.waterLevel = T.flood.start;
       this.events().onWaterLevel?.(this.waterLevel);

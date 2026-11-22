@@ -194,9 +194,10 @@ describe('other disasters', () => {
   it.each(SEEDS)('hail: house survives, hail stones appear and are cleaned up (seed %i)', async (seed) => {
     const g = PRESETS.house();
     const root = new THREE.Group();
-    const meshes = meshesFor(g, root);
+    const meshes = meshesFor(g, new THREE.Group());
     const before = root.children.length;
     const sim = new PhysicsSim();
+    sim.setEffectsRoot(root);
     await sim.start(g, meshes, 'hail', seed);
     let maxChildren = before;
     while (sim.isRunning()) {

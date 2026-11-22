@@ -9,8 +9,8 @@
 import { expect, test, type Page } from '@playwright/test';
 
 const PENDING = {
-  physics: true, // pkg A
-  presets: true, // pkg C
+  physics: false, // pkg A
+  presets: false, // pkg C
 };
 
 const DISASTER_TIMEOUT_MS = 30_000; // 8 s disaster plus Rapier load and slow CI frames

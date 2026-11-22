@@ -43,6 +43,7 @@ export class Game implements GameActions, GameDebugApi {
     this.scene = new SceneManager(container);
     this.build = new BuildController(this.scene, this.assets, this.audio);
 
+    this.physics.setEffectsRoot(this.scene.scene);
     this.physics.setEvents({
       onJointBreak: (id) => {
         this.audio.playJointSnap();
