@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { HUD } from './components/HUD';
+import { installDebugApi } from './engine/debug';
 import { Game } from './engine/Game';
 
 export function App() {
@@ -8,8 +9,10 @@ export function App() {
 
   useEffect(() => {
     const g = new Game(container.current!);
+    const uninstallDebug = installDebugApi(g);
     setGame(g);
     return () => {
+      uninstallDebug();
       g.dispose();
       setGame(null);
     };
