@@ -31,7 +31,12 @@ export class PhysicsSim {
   constructor(private events: PhysicsEvents = {}) {}
 
   /** Build the Rapier world from the graph and begin the disaster. */
-  async start(_graph: BlueprintGraph, _meshes: MeshRegistry, _disaster: DisasterType, _seed = 1): Promise<void> {
+  async start(
+    _graph: BlueprintGraph,
+    _meshes: MeshRegistry,
+    _disaster: DisasterType,
+    _seed = 1,
+  ): Promise<void> {
     void this.events;
   }
 
@@ -50,7 +55,17 @@ export class PhysicsSim {
     return false;
   }
 
-  getTelemetry(): Pick<Telemetry, 'mode' | 'timeRemaining' | 'activeJoints' | 'brokenJoints' | 'firstBrokenId' | 'waterLevel'> {
-    return { mode: 'build', timeRemaining: DISASTER_SECONDS, activeJoints: 0, brokenJoints: 0, firstBrokenId: null, waterLevel: -2 };
+  getTelemetry(): Pick<
+    Telemetry,
+    'mode' | 'timeRemaining' | 'activeJoints' | 'brokenJoints' | 'firstBrokenId' | 'waterLevel'
+  > {
+    return {
+      mode: 'build',
+      timeRemaining: DISASTER_SECONDS,
+      activeJoints: 0,
+      brokenJoints: 0,
+      firstBrokenId: null,
+      waterLevel: -2,
+    };
   }
 }

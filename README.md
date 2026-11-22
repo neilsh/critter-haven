@@ -12,6 +12,8 @@ npm install
 npm run dev      # start the game
 npm run build    # typecheck + production build
 npm test         # headless unit/physics tests
+npm run lint     # oxlint
+npm run format   # oxfmt (CI runs `npm run format:check`)
 ```
 
 See [docs/PLAN.md](docs/PLAN.md) for the architecture, module contracts and work packages.
