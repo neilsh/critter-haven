@@ -29,7 +29,7 @@ export function CameraPanel({ actions }: { actions: GameActions }) {
       ))}
       <Chip
         testId="mute-toggle"
-        label={s.muted ? 'Unmute' : 'Mute'}
+        label="Mute"
         icon={s.muted ? <VolumeX size={18} /> : <Volume2 size={18} />}
         active={s.muted}
         onClick={() => actions.setMuted(!s.muted)}

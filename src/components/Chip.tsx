@@ -4,7 +4,7 @@ interface ChipProps {
   testId: string;
   label: string;
   icon?: ReactNode;
-  /** Set for toggle-style buttons (tools, materials, mirror, cameras, presets). Omit for one-shot actions. */
+  /** Set for toggle-style buttons (tools, materials, mirror, cameras, mute). Omit for one-shot actions. */
   active?: boolean;
   disabled?: boolean;
   onClick: () => void;
@@ -13,13 +13,13 @@ interface ChipProps {
   className?: string;
 }
 
-/** Big, friendly, icon-plus-word button. Touch target is at least 48px. */
 const VARIANTS = {
   default: 'bg-white text-sky-900 hover:bg-sky-50',
   go: 'bg-emerald-400 text-emerald-950 hover:bg-emerald-300',
   rewind: 'bg-orange-300 text-orange-950 hover:bg-orange-200',
 };
 
+/** Big, friendly, icon-plus-word button. Touch target is at least 48px. */
 export function Chip({ testId, label, icon, active, disabled, onClick, variant = 'default', className = '' }: ChipProps) {
   const tone = active ? 'bg-amber-300 text-amber-950 ring-4 ring-white' : VARIANTS[variant];
   return (

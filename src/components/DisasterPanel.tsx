@@ -41,7 +41,6 @@ export function DisasterPanel({ actions }: { actions: GameActions }) {
         <span
           data-testid="countdown"
           role="timer"
-          aria-live="polite"
           aria-label={`${seconds} seconds`}
           className="flex h-14 min-w-14 items-center justify-center rounded-full bg-sky-600 px-3 text-2xl font-black tabular-nums text-white shadow-md"
         >
