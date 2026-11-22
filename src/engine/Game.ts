@@ -8,7 +8,15 @@
  *  - Each frame: physics.update(dt) while running, then telemetry is mirrored into the UI store.
  *  - Editing actions (preset, undo, clear) rewind first if a disaster is running or finished.
  */
-import type { BlueprintGraph, DisasterType, GameDebugApi, MaterialType, PresetName, Telemetry, Vec3 } from '../types/blueprint';
+import type {
+  BlueprintGraph,
+  DisasterType,
+  GameDebugApi,
+  MaterialType,
+  PresetName,
+  Telemetry,
+  Vec3,
+} from '../types/blueprint';
 import type { GameActions } from '../types/ui';
 import { uiStore } from '../state/store';
 import { BuildController } from './BuildController';

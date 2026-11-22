@@ -1,7 +1,24 @@
 import type { ReactNode } from 'react';
-import { Box, Building2, Eraser, FlipHorizontal2, House, Paintbrush, Square, Trash2, Undo2, Waypoints } from 'lucide-react';
+import {
+  Box,
+  Building2,
+  Eraser,
+  FlipHorizontal2,
+  House,
+  Paintbrush,
+  Square,
+  Trash2,
+  Undo2,
+  Waypoints,
+} from 'lucide-react';
 import { useUIState } from '../state/store';
-import { MATERIALS, MATERIAL_ORDER, type MaterialType, type PresetName, type ToolType } from '../types/blueprint';
+import {
+  MATERIALS,
+  MATERIAL_ORDER,
+  type MaterialType,
+  type PresetName,
+  type ToolType,
+} from '../types/blueprint';
 import type { GameActions } from '../types/ui';
 import { Chip, Swatch } from './Chip';
 
@@ -51,7 +68,12 @@ export function BuildPanel({ actions }: { actions: GameActions }) {
           disabled={!s.canUndo}
           onClick={() => actions.undo()}
         />
-        <Chip testId="clear-island" label="Clear" icon={<Trash2 size={22} />} onClick={() => actions.clearIsland()} />
+        <Chip
+          testId="clear-island"
+          label="Clear"
+          icon={<Trash2 size={22} />}
+          onClick={() => actions.clearIsland()}
+        />
       </div>
 
       <div className="flex flex-wrap gap-2" role="group" aria-label="Materials">

@@ -28,11 +28,10 @@ async function telemetry(page: Page) {
 }
 
 async function waitForMode(page: Page, mode: 'failed' | 'survived' | 'build') {
-  await page.waitForFunction(
-    (m) => window.__GAME_DEBUG__!.getTelemetry().mode === m,
-    mode,
-    { timeout: DISASTER_TIMEOUT_MS, polling: 250 },
-  );
+  await page.waitForFunction((m) => window.__GAME_DEBUG__!.getTelemetry().mode === m, mode, {
+    timeout: DISASTER_TIMEOUT_MS,
+    polling: 250,
+  });
 }
 
 test.describe('boot', () => {

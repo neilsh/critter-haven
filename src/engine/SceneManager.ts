@@ -13,7 +13,9 @@ export class SceneManager {
   /** Parent group for blocks and struts, so everything can be cleared in one place. */
   readonly buildRoot = new THREE.Group();
   /** Flat top face of the island (y = 0). Raycast against this for placing on the ground. */
-  readonly islandTop = new THREE.Mesh(new THREE.PlaneGeometry(ISLAND_SIZE, ISLAND_SIZE).rotateX(-Math.PI / 2));
+  readonly islandTop = new THREE.Mesh(
+    new THREE.PlaneGeometry(ISLAND_SIZE, ISLAND_SIZE).rotateX(-Math.PI / 2),
+  );
   readonly domElement: HTMLCanvasElement;
 
   constructor(container: HTMLElement) {
