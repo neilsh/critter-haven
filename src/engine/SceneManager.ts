@@ -47,7 +47,8 @@ function grassTexture(): THREE.CanvasTexture {
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.repeat.set(3, 3);
+  // ExtrudeGeometry UVs are in world units, so this is one 8x8-unit tile per repeat.
+  t.repeat.set(1 / 8, 1 / 8);
   t.anisotropy = 4;
   return t;
 }
@@ -93,7 +94,7 @@ export class SceneManager {
   private readonly clouds: THREE.Mesh[] = [];
   private readonly water: THREE.Mesh;
   private readonly waterBase: Float32Array;
-  private readonly clock = new THREE.Clock(false);
+  private readonly timer = new THREE.Timer();
   private rafId = 0;
   private time = 0;
   private tween: Tween | null = null;
@@ -111,7 +112,8 @@ export class SceneManager {
     this.renderer = new THREE.WebGLRenderer({ canvas: this.domElement, antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // PCFSoftShadowMap was removed in recent three; PCF honours shadow.radius for soft edges.
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
 
@@ -137,12 +139,14 @@ export class SceneManager {
     this.controls.minPolarAngle = THREE.MathUtils.degToRad(15);
     this.controls.maxPolarAngle = THREE.MathUtils.degToRad(85);
     this.controls.update();
+    // A drag by the player wins over a preset tween in progress.
+    this.controls.addEventListener('start', this.cancelTween);
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
     this.resize();
 
-    this.clock.start();
+    this.timer.connect(document);
     this.rafId = requestAnimationFrame(this.loop);
   }
 
@@ -187,10 +191,13 @@ export class SceneManager {
     cancelAnimationFrame(this.rafId);
     this.resizeObserver.disconnect();
     this.callbacks.clear();
+    this.controls.removeEventListener('start', this.cancelTween);
     this.controls.dispose();
+    this.timer.dispose();
 
     const textures = new Set<THREE.Texture>();
     this.scene.traverse((obj) => {
+      if (obj instanceof THREE.Light) obj.dispose(); // frees shadow map render targets
       const mesh = obj as THREE.Mesh;
       mesh.geometry?.dispose();
       const mats = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : [];
@@ -208,10 +215,15 @@ export class SceneManager {
 
   // ---------------------------------------------------------------- frame loop
 
-  private readonly loop = () => {
+  private readonly cancelTween = () => {
+    this.tween = null;
+  };
+
+  private readonly loop = (timestamp: number) => {
     if (this.disposed) return;
     this.rafId = requestAnimationFrame(this.loop);
-    const dt = Math.min(this.clock.getDelta(), MAX_FRAME_DT);
+    this.timer.update(timestamp);
+    const dt = Math.min(this.timer.getDelta(), MAX_FRAME_DT);
     this.time += dt;
 
     this.stepTween(dt);
@@ -304,7 +316,6 @@ export class SceneManager {
     dirt.rotation.x = Math.PI;
     dirt.rotation.y = 0.4;
     dirt.position.y = -1.15 - 4.5;
-    dirt.scale.set(1, 1, 1);
     dirt.castShadow = true;
 
     const r = rng(42);
@@ -324,9 +335,10 @@ export class SceneManager {
     // A few flowers on the rim, outside the 16x16 build area.
     const flowerGeo = new THREE.SphereGeometry(0.14, 8, 6);
     const colors = ['#ff8fb1', '#ffd23f', '#ffffff', '#c792ff'];
+    const flowerMats = colors.map((color) => new THREE.MeshStandardMaterial({ color, roughness: 0.6 }));
     const flowers = new THREE.Group();
     for (let i = 0; i < 24; i++) {
-      const f = new THREE.Mesh(flowerGeo, new THREE.MeshStandardMaterial({ color: colors[i % colors.length], roughness: 0.6 }));
+      const f = new THREE.Mesh(flowerGeo, flowerMats[i % flowerMats.length]);
       const side = Math.floor(r() * 4);
       const along = (r() - 0.5) * (ISLAND_SIZE + 1);
       const out = ISLAND_SIZE / 2 + 0.35 + r() * 0.5;
