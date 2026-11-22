@@ -45,10 +45,42 @@ export interface MaterialDef {
 }
 
 export const MATERIALS: Record<MaterialType, MaterialDef> = {
-  wood: { id: 'wood', label: 'Wood', color: 0xc58b4c, density: 0.6, stiffness: 1.0, maxStress: 1.0, buoyancy: 1.3 },
-  stone: { id: 'stone', label: 'Stone', color: 0x9aa0a8, density: 2.0, stiffness: 1.6, maxStress: 1.6, buoyancy: 0.0 },
-  bamboo: { id: 'bamboo', label: 'Bamboo', color: 0x9ccc65, density: 0.45, stiffness: 0.7, maxStress: 1.3, buoyancy: 1.4 },
-  foam: { id: 'foam', label: 'Foam', color: 0xf8bbd0, density: 0.15, stiffness: 0.3, maxStress: 0.5, buoyancy: 3.0 },
+  wood: {
+    id: 'wood',
+    label: 'Wood',
+    color: 0xc58b4c,
+    density: 0.6,
+    stiffness: 1.0,
+    maxStress: 1.0,
+    buoyancy: 1.3,
+  },
+  stone: {
+    id: 'stone',
+    label: 'Stone',
+    color: 0x9aa0a8,
+    density: 2.0,
+    stiffness: 1.6,
+    maxStress: 1.6,
+    buoyancy: 0.0,
+  },
+  bamboo: {
+    id: 'bamboo',
+    label: 'Bamboo',
+    color: 0x9ccc65,
+    density: 0.45,
+    stiffness: 0.7,
+    maxStress: 1.3,
+    buoyancy: 1.4,
+  },
+  foam: {
+    id: 'foam',
+    label: 'Foam',
+    color: 0xf8bbd0,
+    density: 0.15,
+    stiffness: 0.3,
+    maxStress: 0.5,
+    buoyancy: 3.0,
+  },
 };
 
 export const MATERIAL_ORDER: MaterialType[] = ['wood', 'stone', 'bamboo', 'foam'];
@@ -105,7 +137,11 @@ export const cornerInBounds = (k: Vec3) =>
 /** World-space centre of a cell. */
 export function cellToWorld(c: Vec3): Vec3 {
   const half = ISLAND_SIZE / 2;
-  return [c[0] * CELL_SIZE - half + CELL_SIZE / 2, c[1] * CELL_SIZE + CELL_SIZE / 2, c[2] * CELL_SIZE - half + CELL_SIZE / 2];
+  return [
+    c[0] * CELL_SIZE - half + CELL_SIZE / 2,
+    c[1] * CELL_SIZE + CELL_SIZE / 2,
+    c[2] * CELL_SIZE - half + CELL_SIZE / 2,
+  ];
 }
 
 /** World-space position of a corner lattice point. */
@@ -117,7 +153,8 @@ export function cornerToWorld(k: Vec3): Vec3 {
 /** The 8 corner lattice points of a cell. */
 export function cellCorners(c: Vec3): Vec3[] {
   const out: Vec3[] = [];
-  for (const dx of [0, 1]) for (const dy of [0, 1]) for (const dz of [0, 1]) out.push([c[0] + dx, c[1] + dy, c[2] + dz]);
+  for (const dx of [0, 1])
+    for (const dy of [0, 1]) for (const dz of [0, 1]) out.push([c[0] + dx, c[1] + dy, c[2] + dz]);
   return out;
 }
 
@@ -128,7 +165,12 @@ export const mirrorCornerX = (k: Vec3): Vec3 => [GRID_CELLS - k[0], k[1], k[2]];
 /** Blocks that have corner `k` as one of their 8 corners, sorted by id. */
 export function blocksAtCorner(g: BlueprintGraph, k: Vec3): BlockData[] {
   return g.blocks
-    .filter((b) => [0, 1].includes(k[0] - b.cell[0]) && [0, 1].includes(k[1] - b.cell[1]) && [0, 1].includes(k[2] - b.cell[2]))
+    .filter(
+      (b) =>
+        [0, 1].includes(k[0] - b.cell[0]) &&
+        [0, 1].includes(k[1] - b.cell[1]) &&
+        [0, 1].includes(k[2] - b.cell[2]),
+    )
     .sort((p, q) => (p.id < q.id ? -1 : p.id > q.id ? 1 : 0));
 }
 
@@ -168,11 +210,12 @@ function towerPreset(): BlueprintGraph {
  */
 function housePreset(): BlueprintGraph {
   const blocks: BlockData[] = [];
-  for (const x of [3, 4]) for (const z of [3, 4]) {
-    blocks.push(block(x, 0, z, 'stone'));
-    blocks.push(block(x, 1, z, 'wood'));
-    blocks.push(block(x, 2, z, 'wood')); // capped top
-  }
+  for (const x of [3, 4])
+    for (const z of [3, 4]) {
+      blocks.push(block(x, 0, z, 'stone'));
+      blocks.push(block(x, 1, z, 'wood'));
+      blocks.push(block(x, 2, z, 'wood')); // capped top
+    }
   const struts: StrutData[] = [];
   const [x0, x1, z0, z1, yTop] = [3, 5, 3, 5, 2];
   // z-facing walls

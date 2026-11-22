@@ -25,11 +25,7 @@ export class BuildController {
   private graph: BlueprintGraph = emptyGraph();
   private listeners = new Set<() => void>();
 
-  constructor(
-    _scene: SceneManager,
-    _assets: ProceduralAssets,
-    _audio: AudioSynth,
-  ) {}
+  constructor(_scene: SceneManager, _assets: ProceduralAssets, _audio: AudioSynth) {}
 
   /** Current graph (treat as read-only). */
   getGraph(): BlueprintGraph {

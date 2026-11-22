@@ -55,8 +55,14 @@ describe('blueprint helpers', () => {
   it('mirrors cells and corners consistently across x', () => {
     const c: [number, number, number] = [1, 2, 3];
     expect(mirrorCellX(mirrorCellX(c))).toEqual(c);
-    const mirroredCorners = cellCorners(mirrorCellX(c)).map((k) => k.join()).sort();
-    expect(cellCorners(c).map((k) => mirrorCornerX(k).join()).sort()).toEqual(mirroredCorners);
+    const mirroredCorners = cellCorners(mirrorCellX(c))
+      .map((k) => k.join())
+      .sort();
+    expect(
+      cellCorners(c)
+        .map((k) => mirrorCornerX(k).join())
+        .sort(),
+    ).toEqual(mirroredCorners);
     expect(cellToWorld(mirrorCellX(c))[0]).toBe(-cellToWorld(c)[0]);
   });
 
@@ -65,7 +71,10 @@ describe('blueprint helpers', () => {
     expect(isStrutValid(g, [0, 0, 0], [2, 0, 2])).toBe(true); // both on the ground
     expect(isStrutValid(g, [0, 0, 0], [0, 0, 0])).toBe(false); // zero length
     expect(isStrutValid(g, [0, 0, 0], [0, 2, 0])).toBe(false); // top end floats
-    g.blocks.push({ id: blockId([0, 0, 0]), cell: [0, 0, 0], material: 'wood' }, { id: blockId([0, 1, 0]), cell: [0, 1, 0], material: 'wood' });
+    g.blocks.push(
+      { id: blockId([0, 0, 0]), cell: [0, 0, 0], material: 'wood' },
+      { id: blockId([0, 1, 0]), cell: [0, 1, 0], material: 'wood' },
+    );
     expect(isStrutValid(g, [0, 0, 0], [0, 2, 0])).toBe(true);
     expect(blocksAtCorner(g, [1, 1, 1]).map((b) => b.id)).toEqual(['b:0,0,0', 'b:0,1,0']);
   });
