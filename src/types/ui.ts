@@ -1,4 +1,4 @@
-import type { DisasterType, GameMode, MaterialType, PresetName, ToolType } from './blueprint';
+import type { Azimuth, DisasterType, GameMode, MaterialType, PresetName, ToolType } from './blueprint';
 
 /** Everything the HUD renders. Written by the engine side, read by React. */
 export interface UIState {
@@ -7,11 +7,13 @@ export interface UIState {
   mirrorX: boolean;
   disaster: DisasterType;
   mode: GameMode;
-  /** Seconds left in the disaster countdown (8 when idle). */
+  /** Seconds left in the disaster countdown (DISASTER_SECONDS when idle). */
   timeRemaining: number;
+  /** Id of the first piece that broke in the current run, for the HUD and highlight. */
+  firstBrokenId: string | null;
   muted: boolean;
   canUndo: boolean;
-  azimuth: 0 | 90 | 180 | 270;
+  azimuth: Azimuth;
 }
 
 /** Everything the HUD can ask the engine to do. Implemented by `Game`. */
@@ -25,6 +27,6 @@ export interface GameActions {
   clearIsland(): void;
   /** Starts the selected disaster, or rewinds if one is running/finished. */
   toggleDisaster(): void;
-  setCameraAzimuth(deg: 0 | 90 | 180 | 270): void;
+  setCameraAzimuth(deg: Azimuth): void;
   setMuted(muted: boolean): void;
 }

@@ -10,7 +10,11 @@ import { emptyGraph } from '../types/blueprint';
 import type { AudioSynth, ProceduralAssets } from './ProceduralAssets';
 import type { SceneManager } from './SceneManager';
 
-/** Mesh lookup the physics sim uses to move/tint pieces. Keyed by BlockData.id / StrutData.id. */
+/**
+ * Mesh lookup the physics sim uses to move/tint pieces. Keyed by BlockData.id / StrutData.id.
+ * Meshes are direct children of `SceneManager.buildRoot`, so their position/quaternion are world
+ * transforms. three.js core runs in Node, so headless tests can fill this with plain `new THREE.Mesh()`.
+ */
 export interface MeshRegistry {
   blocks: Map<string, THREE.Mesh>;
   struts: Map<string, THREE.Mesh>;
@@ -36,7 +40,10 @@ export class BuildController {
   loadPreset(_name: PresetName): void {}
   loadGraph(_g: BlueprintGraph): void {}
 
-  /** Programmatic edits (used by the debug API and tests). Respect mirror mode only via the UI tools. */
+  /**
+   * Programmatic edits (used by the debug API and tests). They ignore mirror mode, which applies only
+   * to pointer tools, and return false when the edit is rejected (see validity rules in blueprint.ts).
+   */
   placeBlock(_cell: Vec3, _material: MaterialType): boolean {
     return false;
   }

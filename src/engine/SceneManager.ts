@@ -4,7 +4,8 @@
  * frame delta in seconds. It must dispose all WebGL resources in `dispose()`.
  */
 import * as THREE from 'three';
-import type { Vec3 } from '../types/blueprint';
+import type { Azimuth, Vec3 } from '../types/blueprint';
+import { ISLAND_SIZE } from '../types/blueprint';
 
 export class SceneManager {
   readonly scene = new THREE.Scene();
@@ -12,7 +13,7 @@ export class SceneManager {
   /** Parent group for blocks and struts, so everything can be cleared in one place. */
   readonly buildRoot = new THREE.Group();
   /** Flat top face of the island (y = 0). Raycast against this for placing on the ground. */
-  readonly islandTop = new THREE.Mesh(new THREE.PlaneGeometry(16, 16).rotateX(-Math.PI / 2));
+  readonly islandTop = new THREE.Mesh(new THREE.PlaneGeometry(ISLAND_SIZE, ISLAND_SIZE).rotateX(-Math.PI / 2));
   readonly domElement: HTMLCanvasElement;
 
   constructor(container: HTMLElement) {
@@ -26,8 +27,8 @@ export class SceneManager {
     return () => {};
   }
 
-  /** Smoothly tween the camera azimuth around the island centre. */
-  setAzimuth(_degrees: 0 | 90 | 180 | 270): void {}
+  /** Smoothly tween the camera azimuth around the island centre (see `Azimuth` for directions). */
+  setAzimuth(_degrees: Azimuth): void {}
 
   /** Enable/disable OrbitControls (disabled while the player drags a brace, for example). */
   setControlsEnabled(_enabled: boolean): void {}

@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import { DISASTER_SECONDS } from '../types/blueprint';
 import type { UIState } from '../types/ui';
 
 type Listener = () => void;
@@ -11,7 +12,8 @@ class UIStore {
     mirrorX: false,
     disaster: 'earthquake',
     mode: 'build',
-    timeRemaining: 8,
+    timeRemaining: DISASTER_SECONDS,
+    firstBrokenId: null,
     muted: false,
     canUndo: false,
     azimuth: 0,
@@ -27,7 +29,9 @@ class UIStore {
 
   subscribe = (l: Listener) => {
     this.listeners.add(l);
-    return () => this.listeners.delete(l);
+    return () => {
+      this.listeners.delete(l);
+    };
   };
 }
 

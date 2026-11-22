@@ -15,12 +15,16 @@ export type Vec3 = [number, number, number];
 export type MaterialType = 'wood' | 'stone' | 'bamboo' | 'foam';
 export type DisasterType = 'earthquake' | 'hurricane' | 'flood' | 'hail';
 export type ToolType = 'block' | 'brace' | 'paint' | 'erase';
+/** Camera azimuth presets in degrees: 0 = front (looking toward -z), 90 = right, 180 = back, 270 = left. */
+export type Azimuth = 0 | 90 | 180 | 270;
 
 export const CELL_SIZE = 2;
 /** 16x16 world-unit build area = 8x8 cells. */
 export const GRID_CELLS = 8;
 export const MAX_HEIGHT_CELLS = 8;
 export const ISLAND_SIZE = GRID_CELLS * CELL_SIZE;
+/** Length of every disaster run, in seconds. Survive this long with zero broken joints to win. */
+export const DISASTER_SECONDS = 8;
 
 export interface MaterialDef {
   id: MaterialType;
@@ -32,8 +36,8 @@ export interface MaterialDef {
   /** Joint spring stiffness multiplier. */
   stiffness: number;
   /**
-   * Break threshold. Strain ratio = joint stretch / (maxStress * STRAIN_UNIT).
-   * Tuned by the physics package; the values here are starting points.
+   * Break threshold. Strain ratio = joint stretch / (maxStress * a stretch unit owned by
+   * PhysicsSim). Tuned by the physics package; the values here are starting points.
    */
   maxStress: number;
   /** 0 = sinks, 1 = neutrally buoyant, >1 floats. */
@@ -65,6 +69,15 @@ export interface StrutData {
   material: MaterialType;
 }
 
+/**
+ * Validity rules (enforced by BuildController, assumed by PhysicsSim):
+ *  - Block cells are in bounds and unique. Blocks may float: anything not connected to the ground
+ *    simply falls when the simulation starts.
+ *  - Strut endpoints are in bounds, distinct, and each one is either a corner of at least one block
+ *    or on the ground (ky = 0). See `isStrutValid`.
+ *  - Physics attaches each strut end to the first block from `blocksAtCorner` (sorted by id, so
+ *    deterministic), or to the island anchor when no block has that corner.
+ */
 export interface BlueprintGraph {
   version: 1;
   blocks: BlockData[];
@@ -108,6 +121,24 @@ export function cellCorners(c: Vec3): Vec3[] {
   return out;
 }
 
+/** Mirror across the island's centre plane x = ISLAND_SIZE/2 (used by mirror-X build mode). */
+export const mirrorCellX = (c: Vec3): Vec3 => [GRID_CELLS - 1 - c[0], c[1], c[2]];
+export const mirrorCornerX = (k: Vec3): Vec3 => [GRID_CELLS - k[0], k[1], k[2]];
+
+/** Blocks that have corner `k` as one of their 8 corners, sorted by id. */
+export function blocksAtCorner(g: BlueprintGraph, k: Vec3): BlockData[] {
+  return g.blocks
+    .filter((b) => [0, 1].includes(k[0] - b.cell[0]) && [0, 1].includes(k[1] - b.cell[1]) && [0, 1].includes(k[2] - b.cell[2]))
+    .sort((p, q) => (p.id < q.id ? -1 : p.id > q.id ? 1 : 0));
+}
+
+/** True when a strut a-b obeys the validity rules above against graph `g`. */
+export function isStrutValid(g: BlueprintGraph, a: Vec3, b: Vec3): boolean {
+  if (!cornerInBounds(a) || !cornerInBounds(b) || key(a) === key(b)) return false;
+  const anchored = (k: Vec3) => k[1] === 0 || blocksAtCorner(g, k).length > 0;
+  return anchored(a) && anchored(b);
+}
+
 export function emptyGraph(): BlueprintGraph {
   return { version: 1, blocks: [], struts: [] };
 }
@@ -131,8 +162,9 @@ function towerPreset(): BlueprintGraph {
 }
 
 /**
- * Compact 2x2x2 house: stone ground floor, wood upper floor, wood cap, and bamboo diagonal
- * cross-braces on all four walls. Designed to survive a standard earthquake.
+ * Compact house, 2x2 footprint and 3 layers tall: stone ground floor, wood upper floor, wood cap,
+ * and bamboo diagonal cross-braces over the bottom two layers of all four walls. Designed to
+ * survive a standard earthquake.
  */
 function housePreset(): BlueprintGraph {
   const blocks: BlockData[] = [];
@@ -164,7 +196,11 @@ export const PRESETS: Record<PresetName, () => BlueprintGraph> = {
 
 // ---------------------------------------------------------------- telemetry & debug API
 
-export type GameMode = 'build' | 'simulating' | 'survived';
+/**
+ * build: editing. simulating: disaster running. Once the 8 s countdown ends the sim stops stepping
+ * and the mode becomes survived (zero broken joints) or failed (at least one). Rewind -> build.
+ */
+export type GameMode = 'build' | 'simulating' | 'survived' | 'failed';
 
 export interface Telemetry {
   mode: GameMode;
@@ -179,10 +215,14 @@ export interface Telemetry {
 
 export interface GameDebugApi {
   loadPreset(name: PresetName): void;
-  placeBlock(x: number, y: number, z: number, material: MaterialType): void;
-  addStrut(a: Vec3, b: Vec3, material: MaterialType): void;
-  setCameraAzimuth(degrees: 0 | 90 | 180 | 270): void;
-  startDisaster(type: DisasterType): void;
+  /** Returns false if the cell is out of bounds or occupied. */
+  placeBlock(x: number, y: number, z: number, material: MaterialType): boolean;
+  /** Returns false if the strut is invalid (see `isStrutValid`) or already exists. */
+  addStrut(a: Vec3, b: Vec3, material: MaterialType): boolean;
+  getGraph(): BlueprintGraph;
+  setCameraAzimuth(degrees: Azimuth): void;
+  /** Resolves once Rapier is initialised and the first step can run. */
+  startDisaster(type: DisasterType, seed?: number): Promise<void>;
   rewind(): void;
   getTelemetry(): Telemetry;
 }
