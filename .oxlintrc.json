@@ -64,13 +64,22 @@
       }
     ],
     "unicorn/prefer-query-selector": "off",
-    "typescript/consistent-return": "off"
+    "typescript/consistent-return": "off",
+    "no-underscore-dangle": [
+      "error",
+      {
+        "allow": ["__GAME_DEBUG__"]
+      }
+    ],
+    "react-perf/jsx-no-jsx-as-prop": "off",
+    "jsx-a11y/prefer-tag-over-role": "off"
   },
   "overrides": [
     {
-      "files": ["**/*.test.ts", "e2e/**"],
+      "files": ["**/*.test.ts", "**/*.test.tsx", "e2e/**"],
       "rules": {
-        "typescript/no-non-null-assertion": "off"
+        "typescript/no-non-null-assertion": "off",
+        "typescript/no-unsafe-type-assertion": "off"
       }
     }
   ],
