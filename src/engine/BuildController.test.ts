@@ -5,9 +5,19 @@ import { AudioSynth, ProceduralAssets } from './ProceduralAssets';
 import type { SceneManager } from './SceneManager';
 import { ISLAND_SIZE, cornerToWorld, strutId } from '../types/blueprint';
 
+function standardMaterial(m: THREE.Mesh): THREE.MeshStandardMaterial {
+  if (!(m.material instanceof THREE.MeshStandardMaterial)) throw new Error('expected MeshStandardMaterial');
+  return m.material;
+}
+
 function setup() {
-  const dom = new EventTarget() as unknown as HTMLCanvasElement;
-  (dom as any).getBoundingClientRect = () => ({ left: 0, top: 0, width: 800, height: 600 });
+  const captured = new Set<number>();
+  const dom = Object.assign(new EventTarget(), {
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+    setPointerCapture: (id: number) => captured.add(id),
+    releasePointerCapture: (id: number) => captured.delete(id),
+    hasPointerCapture: (id: number) => captured.has(id),
+  });
   const camera = new THREE.PerspectiveCamera(45, 800 / 600, 0.1, 200);
   camera.position.set(0, 25, 30);
   camera.lookAt(0, 3, 0);
@@ -16,6 +26,7 @@ function setup() {
   islandTop.updateMatrixWorld();
   let controls = true;
   const frame: Array<(dt: number) => void> = [];
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- minimal headless stand-in for SceneManager
   const scene = {
     scene: new THREE.Scene(),
     camera,
@@ -26,21 +37,14 @@ function setup() {
     setControlsEnabled: (e: boolean) => (controls = e),
   } as unknown as SceneManager;
   const bc = new BuildController(scene, new ProceduralAssets(), new AudioSynth());
-  const captured = new Set<number>();
-  Object.assign(dom, {
-    setPointerCapture: (id: number) => captured.add(id),
-    releasePointerCapture: (id: number) => captured.delete(id),
-    hasPointerCapture: (id: number) => captured.has(id),
-  });
   const fire = (type: string, x: number, y: number, extra: Record<string, unknown> = {}) => {
-    const e = new Event(type) as any;
-    e.clientX = x;
-    e.clientY = y;
-    e.button = 0;
-    e.pointerId = 1;
-    e.isPrimary = true;
-    Object.assign(e, extra);
-    dom.dispatchEvent(e);
+    dom.dispatchEvent(
+      Object.assign(
+        new Event(type),
+        { clientX: x, clientY: y, button: 0, pointerId: 1, isPrimary: true },
+        extra,
+      ),
+    );
   };
   const screen = (p: [number, number, number]) => {
     const v = new THREE.Vector3(...p).project(camera);
@@ -87,10 +91,10 @@ describe('BuildController', () => {
     expect(n).toBe(1);
     const m = bc.meshes.blocks.get('b:2,0,2')!;
     m.position.y += 5;
-    (m.material as THREE.MeshStandardMaterial).emissive.setHex(0xff0000);
+    standardMaterial(m).emissive.setHex(0xff0000);
     bc.resetMeshes();
     expect(m.position.y).toBe(1);
-    expect((m.material as THREE.MeshStandardMaterial).emissive.getHex()).toBe(0);
+    expect(standardMaterial(m).emissive.getHex()).toBe(0);
   });
 
   it('loadPreset replaces the graph and clears history', () => {
@@ -124,7 +128,7 @@ describe('BuildController', () => {
     fire('pointermove', sx, sy);
     fire('pointerdown', sx, sy);
     fire('pointerup', sx, sy);
-    expect(bc.getGraph().blocks.map((b) => b.id).sort()).toEqual(['b:1,0,4', 'b:6,0,4']);
+    expect(new Set(bc.getGraph().blocks.map((b) => b.id))).toEqual(new Set(['b:1,0,4', 'b:6,0,4']));
 
     bc.setTool('brace');
     const a = screen(cornerToWorld([1, 0, 4]));
@@ -176,9 +180,9 @@ describe('BuildController', () => {
   });
 
   it('shows the level grid at the height a block would land on', () => {
-    const { bc, fire, screen } = setup();
+    const { bc, fire, screen, scene } = setup();
     bc.placeBlock([3, 0, 3], 'wood');
-    const grid = (bc as unknown as { levelGrid: THREE.Object3D }).levelGrid;
+    const grid = scene.scene.getObjectsByProperty('type', 'GridHelper')[0];
     const top = screen([-1, 2, -1]); // top face of the block
     fire('pointermove', top[0], top[1]);
     expect(grid.visible).toBe(true);

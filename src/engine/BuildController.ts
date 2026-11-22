@@ -56,6 +56,18 @@ interface PieceInfo {
 
 const sameVec = (a: Vec3, b: Vec3) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
 
+/** Dispose a mesh's own material(s). Geometry is shared via ProceduralAssets and never disposed here. */
+function disposeMaterial(m: THREE.Mesh): void {
+  for (const mat of Array.isArray(m.material) ? m.material : [m.material]) mat.dispose();
+}
+
+/** Emissive colour of a piece's material, when it has one (createMaterial returns MeshStandardMaterial). */
+function emissiveOf(m: THREE.Mesh): THREE.Color | null {
+  return m.material instanceof THREE.MeshStandardMaterial ? m.material.emissive : null;
+}
+
+type PointerType = 'pointerdown' | 'pointermove' | 'pointerup' | 'pointerleave' | 'pointercancel';
+
 export class BuildController {
   readonly meshes: MeshRegistry = { blocks: new Map(), struts: new Map() };
   private graph: BlueprintGraph = emptyGraph();
@@ -91,7 +103,9 @@ export class BuildController {
 
   private readonly unsubFrame: () => void;
   private readonly dom: HTMLElement | null;
-  private readonly handlers: Array<[string, (e: PointerEvent) => void, boolean]> = [];
+  private readonly unlisten: Array<() => void> = [];
+  /** Which graph piece each block/strut mesh renders. */
+  private readonly pieces = new WeakMap<THREE.Object3D, PieceInfo>();
   private time = 0;
 
   constructor(
@@ -112,10 +126,11 @@ export class BuildController {
     this.cornerMarker.visible = false;
     this.ghostRoot.add(this.cornerMarker);
     this.levelGrid = new THREE.GridHelper(ISLAND_SIZE, GRID_CELLS, 0xffffff, 0xffffff);
-    const gridMat = this.levelGrid.material as THREE.LineBasicMaterial;
-    gridMat.transparent = true;
-    gridMat.opacity = 0.25;
-    gridMat.depthWrite = false;
+    for (const gridMat of [this.levelGrid.material].flat()) {
+      gridMat.transparent = true;
+      gridMat.opacity = 0.25;
+      gridMat.depthWrite = false;
+    }
     this.levelGrid.visible = false;
     this.ghostRoot.add(this.levelGrid);
     for (let i = 0; i < 2; i++) {
@@ -132,13 +147,14 @@ export class BuildController {
     this.unsubFrame = sceneMgr.onFrame((dt) => this.onFrame(dt));
 
     // Capture phase so the brace tool can claim a drag before orbit controls see it.
-    this.dom = typeof sceneMgr.domElement?.addEventListener === 'function' ? sceneMgr.domElement : null;
-    if (this.dom) {
-      this.listen('pointerdown', (e) => this.onPointerDown(e), true);
-      this.listen('pointermove', (e) => this.onPointerMove(e), false);
-      this.listen('pointerup', (e) => this.onPointerUp(e), false);
-      this.listen('pointerleave', () => this.onPointerLeave(), false);
-      this.listen('pointercancel', () => this.cancelDrag(), false);
+    const dom = typeof sceneMgr.domElement?.addEventListener === 'function' ? sceneMgr.domElement : null;
+    this.dom = dom;
+    if (dom) {
+      this.listen(dom, 'pointerdown', (e) => this.onPointerDown(e), true);
+      this.listen(dom, 'pointermove', (e) => this.onPointerMove(e), false);
+      this.listen(dom, 'pointerup', (e) => this.onPointerUp(e), false);
+      this.listen(dom, 'pointerleave', () => this.onPointerLeave(), false);
+      this.listen(dom, 'pointercancel', () => this.cancelDrag(), false);
     }
   }
 
@@ -243,8 +259,8 @@ export class BuildController {
 
   dispose(): void {
     this.unsubFrame();
-    if (this.dom) for (const [type, fn, capture] of this.handlers) this.dom.removeEventListener(type, fn as EventListener, capture);
-    this.handlers.length = 0;
+    this.unlisten.forEach((off) => off());
+    this.unlisten.length = 0;
     this.sceneMgr.setControlsEnabled(true);
     for (const m of this.allMeshes()) this.disposeMesh(m);
     this.meshes.blocks.clear();
@@ -333,14 +349,14 @@ export class BuildController {
       }
       for (const item of items) {
         let m = reg.get(item.id);
-        const info = m?.userData.piece as PieceInfo | undefined;
+        const info = m && this.pieces.get(m);
         if (m && info && info.material !== item.material) {
-          (m.material as THREE.Material).dispose();
+          disposeMaterial(m);
           m.material = this.assets.createMaterial(item.material);
           info.material = item.material;
         } else if (!m) {
           m = new THREE.Mesh(geometry, this.assets.createMaterial(item.material));
-          m.userData.piece = { kind, id: item.id, material: item.material } satisfies PieceInfo;
+          this.pieces.set(m, { kind, id: item.id, material: item.material });
           m.castShadow = true;
           m.receiveShadow = true;
           root.add(m);
@@ -351,8 +367,12 @@ export class BuildController {
         this.setEmissive(m, 0x000000);
       }
     };
-    sync(this.graph.blocks, this.meshes.blocks, 'block', this.assets.getBlockGeometry(), (m, b) => this.placeBlockMesh(m, b.cell));
-    sync(this.graph.struts, this.meshes.struts, 'strut', this.assets.getStrutGeometry(), (m, s) => this.placeStrutMesh(m, s.a, s.b));
+    sync(this.graph.blocks, this.meshes.blocks, 'block', this.assets.getBlockGeometry(), (m, b) =>
+      this.placeBlockMesh(m, b.cell),
+    );
+    sync(this.graph.struts, this.meshes.struts, 'strut', this.assets.getStrutGeometry(), (m, s) =>
+      this.placeStrutMesh(m, s.a, s.b),
+    );
   }
 
   private placeBlockMesh(m: THREE.Mesh, cell: Vec3): void {
@@ -374,7 +394,7 @@ export class BuildController {
   }
 
   private disposeMesh(m: THREE.Mesh): void {
-    (m.material as THREE.Material).dispose();
+    disposeMaterial(m);
     m.parent?.remove(m);
   }
 
@@ -387,8 +407,7 @@ export class BuildController {
   }
 
   private setEmissive(m: THREE.Mesh, color: number): void {
-    const mat = m.material as THREE.MeshStandardMaterial;
-    mat.emissive?.setHex(color);
+    emissiveOf(m)?.setHex(color);
   }
 
   private onFrame(dt: number): void {
@@ -397,26 +416,27 @@ export class BuildController {
     const m = this.findMesh(this.highlightId);
     if (!m) return;
     const pulse = 0.35 + 0.35 * Math.sin(this.time * 8);
-    (m.material as THREE.MeshStandardMaterial).emissive?.setRGB(pulse + 0.3, 0, 0);
+    emissiveOf(m)?.setRGB(pulse + 0.3, 0, 0);
   }
 
   private rebuildCorners(): void {
     const c = new Map<string, Vec3>();
-    for (let x = 0; x <= GRID_CELLS; x++) for (let z = 0; z <= GRID_CELLS; z++) c.set(key([x, 0, z]), [x, 0, z]);
+    for (let x = 0; x <= GRID_CELLS; x++)
+      for (let z = 0; z <= GRID_CELLS; z++) c.set(key([x, 0, z]), [x, 0, z]);
     for (const b of this.graph.blocks) for (const k of cellCorners(b.cell)) c.set(key(k), k);
     this.corners = c;
   }
 
   // ------------------------------------------------------------------ pointer handling
 
-  private listen(type: string, fn: (e: PointerEvent) => void, capture: boolean): void {
-    this.dom!.addEventListener(type, fn as EventListener, capture);
-    this.handlers.push([type, fn, capture]);
+  private listen(dom: HTMLElement, type: PointerType, fn: (e: PointerEvent) => void, capture: boolean): void {
+    dom.addEventListener(type, fn, capture);
+    this.unlisten.push(() => dom.removeEventListener(type, fn, capture));
   }
 
   private setRay(x: number, y: number): boolean {
-    const rect = this.dom!.getBoundingClientRect();
-    if (!rect.width || !rect.height) return false;
+    const rect = this.dom?.getBoundingClientRect();
+    if (!rect?.width || !rect.height) return false;
     this.ndc.set(((x - rect.left) / rect.width) * 2 - 1, -((y - rect.top) / rect.height) * 2 + 1);
     this.sceneMgr.camera.updateMatrixWorld();
     // Meshes added since the last render have a stale matrixWorld, which raycasting reads.
@@ -428,7 +448,8 @@ export class BuildController {
 
   /** Nearest snap corner to the pointer in screen space, or null. */
   private pickCorner(x: number, y: number): Vec3 | null {
-    const rect = this.dom!.getBoundingClientRect();
+    const rect = this.dom?.getBoundingClientRect();
+    if (!rect) return null;
     const cam = this.sceneMgr.camera;
     cam.updateMatrixWorld();
     const v = new THREE.Vector3();
@@ -452,10 +473,13 @@ export class BuildController {
 
   /** Cell a new block would go into for the current pointer, or null. */
   private pickPlacementCell(): Vec3 | null {
-    const hits = this.raycaster.intersectObjects([...this.meshes.blocks.values(), this.sceneMgr.islandTop], false);
+    const hits = this.raycaster.intersectObjects(
+      [...this.meshes.blocks.values(), this.sceneMgr.islandTop],
+      false,
+    );
     const hit = hits[0];
     if (!hit) return null;
-    const info = hit.object.userData.piece as PieceInfo | undefined;
+    const info = this.pieces.get(hit.object);
     if (info) {
       const base = this.graph.blocks.find((b) => b.id === info.id);
       if (!base || !hit.face) return null;
@@ -476,14 +500,14 @@ export class BuildController {
     const list: THREE.Mesh[] = [];
     if (kinds.includes('block')) list.push(...this.meshes.blocks.values());
     if (kinds.includes('strut')) list.push(...this.meshes.struts.values());
-    const hit = this.raycaster.intersectObjects(list, false)[0];
-    return (hit?.object as THREE.Mesh) ?? null;
+    const hit = this.raycaster.intersectObjects(list, false)[0]?.object;
+    return hit instanceof THREE.Mesh ? hit : null;
   }
 
   private onPointerDown(e: PointerEvent): void {
     if (!this.enabled || e.button > 0) return;
     // A second finger means pinch/orbit, never a click or brace: drop whatever the first one started.
-    if (e.isPrimary === false) return this.cancelDrag();
+    if (!e.isPrimary) return this.cancelDrag();
     this.pointer = { x: e.clientX, y: e.clientY };
     if (this.tool === 'brace') {
       const corner = this.pickCorner(e.clientX, e.clientY);
@@ -491,7 +515,11 @@ export class BuildController {
         this.braceStart = corner;
         this.sceneMgr.setControlsEnabled(false);
         // Keep receiving moves/up even if the drag leaves the canvas, so controls are always re-enabled.
-        if (e.pointerId !== undefined) this.dom?.setPointerCapture?.(e.pointerId);
+        try {
+          this.dom?.setPointerCapture?.(e.pointerId);
+        } catch {
+          // Synthetic events (tests, debug tooling) have no active pointer to capture.
+        }
         e.stopImmediatePropagation();
       }
     }
@@ -500,7 +528,7 @@ export class BuildController {
   }
 
   private onPointerMove(e: PointerEvent): void {
-    if (!this.enabled || e.isPrimary === false) return;
+    if (!this.enabled || !e.isPrimary) return;
     this.pointer = { x: e.clientX, y: e.clientY };
     this.updatePreview();
   }
@@ -511,7 +539,7 @@ export class BuildController {
   }
 
   private onPointerUp(e: PointerEvent): void {
-    if (e.isPrimary === false) return;
+    if (!e.isPrimary) return;
     const pressed = this.pressed;
     this.releaseCapture();
     this.pressed = null;
@@ -573,7 +601,8 @@ export class BuildController {
   private placeBraceWithMirror(a: Vec3, b: Vec3): boolean {
     const ok = this.commit((g) => {
       let added = this.addStrutTo(g, a, b, this.material);
-      if (this.mirrorX) added = this.addStrutTo(g, mirrorCornerX(a), mirrorCornerX(b), this.material) || added;
+      if (this.mirrorX)
+        added = this.addStrutTo(g, mirrorCornerX(a), mirrorCornerX(b), this.material) || added;
       return added;
     });
     if (ok) this.audio.playBraceStretch();
@@ -581,7 +610,8 @@ export class BuildController {
   }
 
   private eraseWithMirror(m: THREE.Mesh): boolean {
-    const info = m.userData.piece as PieceInfo;
+    const info = this.pieces.get(m);
+    if (!info) return false;
     const piece = this.graph.blocks.find((b) => b.id === info.id);
     const strut = this.graph.struts.find((s) => s.id === info.id);
     return this.commit((g) => {
@@ -601,7 +631,8 @@ export class BuildController {
   }
 
   private paintWithMirror(m: THREE.Mesh): boolean {
-    const info = m.userData.piece as PieceInfo;
+    const info = this.pieces.get(m);
+    if (!info) return false;
     const piece = this.graph.blocks.find((b) => b.id === info.id);
     const strut = this.graph.struts.find((s) => s.id === info.id);
     return this.commit((g) => {
@@ -621,10 +652,11 @@ export class BuildController {
   // ------------------------------------------------------------------ previews
 
   private updatePreview(): void {
-    for (const g of [...this.blockGhosts, ...this.strutGhosts, this.cornerMarker, this.levelGrid]) g.visible = false;
+    for (const g of [...this.blockGhosts, ...this.strutGhosts, this.cornerMarker, this.levelGrid])
+      g.visible = false;
     if (this.hoverPiece) {
-      const info = this.hoverPiece.userData.piece as PieceInfo;
-      if (info.id !== this.highlightId) this.setEmissive(this.hoverPiece, 0x000000);
+      if (this.pieces.get(this.hoverPiece)?.id !== this.highlightId)
+        this.setEmissive(this.hoverPiece, 0x000000);
       this.hoverPiece = null;
     }
     if (!this.enabled || !this.dom || !this.pointer) return;
@@ -656,9 +688,14 @@ export class BuildController {
         pairs.forEach(([a, b], i) => {
           if (sameVec(a, b)) return;
           const ghost = this.strutGhosts[i];
-          const valid = isStrutValid(this.graph, a, b) && !this.graph.struts.some((s) => s.id === strutId(a, b));
+          const valid =
+            isStrutValid(this.graph, a, b) && !this.graph.struts.some((s) => s.id === strutId(a, b));
           ghost.material = this.ghostMat(valid);
-          this.orientStrut(ghost, new THREE.Vector3(...cornerToWorld(a)), new THREE.Vector3(...cornerToWorld(b)));
+          this.orientStrut(
+            ghost,
+            new THREE.Vector3(...cornerToWorld(a)),
+            new THREE.Vector3(...cornerToWorld(b)),
+          );
           ghost.visible = true;
         });
       }
