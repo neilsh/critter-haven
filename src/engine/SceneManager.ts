@@ -8,7 +8,8 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { Azimuth, Vec3 } from '../types/blueprint';
 import { ISLAND_SIZE } from '../types/blueprint';
 
-const TARGET = new THREE.Vector3(0, 3, 0);
+// Low enough that the bottom HUD bar does not cover the island's front edge.
+const TARGET = new THREE.Vector3(0, 1.5, 0);
 const DEFAULT_POLAR = THREE.MathUtils.degToRad(58);
 const DEFAULT_RADIUS = 34;
 const TWEEN_SECONDS = 0.7;
@@ -35,7 +36,8 @@ function grassTexture(): THREE.CanvasTexture {
   const size = 256;
   const c = document.createElement('canvas');
   c.width = c.height = size;
-  const g = c.getContext('2d')!;
+  const g = c.getContext('2d');
+  if (!g) throw new Error('2D canvas context unavailable');
   g.fillStyle = '#7ed957';
   g.fillRect(0, 0, size, size);
   const r = rng(7);
@@ -125,9 +127,11 @@ export class SceneManager {
     this.buildIsland();
     this.buildClouds();
     this.water = this.buildWater();
-    this.waterBase = (this.water.geometry.attributes.position.array as Float32Array).slice();
+    this.waterBase = Float32Array.from(this.water.geometry.attributes.position.array);
 
-    this.camera.position.set(0, 0, DEFAULT_RADIUS).applyAxisAngle(new THREE.Vector3(1, 0, 0), -(Math.PI / 2 - DEFAULT_POLAR));
+    this.camera.position
+      .set(0, 0, DEFAULT_RADIUS)
+      .applyAxisAngle(new THREE.Vector3(1, 0, 0), -(Math.PI / 2 - DEFAULT_POLAR));
     this.camera.position.add(TARGET);
     this.controls = new OrbitControls(this.camera, this.domElement);
     this.controls.target.copy(TARGET);
@@ -198,9 +202,10 @@ export class SceneManager {
     const textures = new Set<THREE.Texture>();
     this.scene.traverse((obj) => {
       if (obj instanceof THREE.Light) obj.dispose(); // frees shadow map render targets
-      const mesh = obj as THREE.Mesh;
-      mesh.geometry?.dispose();
-      const mats = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : [];
+      if (!(obj instanceof THREE.Mesh)) return;
+      const mesh: THREE.Mesh = obj;
+      mesh.geometry.dispose();
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
       for (const m of mats) {
         for (const v of Object.values(m)) if (v instanceof THREE.Texture) textures.add(v);
         m.dispose();
@@ -230,7 +235,7 @@ export class SceneManager {
     this.controls.update();
     this.animateScenery(dt);
 
-    for (const cb of [...this.callbacks]) cb(dt);
+    for (const cb of this.callbacks) cb(dt);
     this.renderer.render(this.scene, this.camera);
   };
 
@@ -253,7 +258,7 @@ export class SceneManager {
       if (c.position.x > 70) c.position.x = -70;
     }
     if (this.water.visible) {
-      const pos = this.water.geometry.attributes.position as THREE.BufferAttribute;
+      const pos = this.water.geometry.attributes.position;
       const base = this.waterBase;
       for (let i = 0; i < pos.count; i++) {
         const x = base[i * 3];
@@ -282,7 +287,14 @@ export class SceneManager {
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
     const half = ISLAND_SIZE * 0.9;
-    Object.assign(sun.shadow.camera, { left: -half, right: half, top: half, bottom: -half, near: 1, far: 70 });
+    Object.assign(sun.shadow.camera, {
+      left: -half,
+      right: half,
+      top: half,
+      bottom: -half,
+      near: 1,
+      far: 70,
+    });
     sun.shadow.radius = 4;
     sun.shadow.bias = -0.0004;
     sun.shadow.normalBias = 0.03;
@@ -342,7 +354,12 @@ export class SceneManager {
       const side = Math.floor(r() * 4);
       const along = (r() - 0.5) * (ISLAND_SIZE + 1);
       const out = ISLAND_SIZE / 2 + 0.35 + r() * 0.5;
-      const [x, z] = [[along, out], [along, -out], [out, along], [-out, along]][side];
+      const [x, z] = [
+        [along, out],
+        [along, -out],
+        [out, along],
+        [-out, along],
+      ][side];
       f.position.set(x, 0.14, z);
       flowers.add(f);
     }
@@ -353,7 +370,12 @@ export class SceneManager {
   private buildClouds(): void {
     const r = rng(99);
     const geo = new THREE.SphereGeometry(1, 12, 8);
-    const mat = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 1, transparent: true, opacity: 0.95 });
+    const mat = new THREE.MeshStandardMaterial({
+      color: '#ffffff',
+      roughness: 1,
+      transparent: true,
+      opacity: 0.95,
+    });
     for (let i = 0; i < 7; i++) {
       const cloud = new THREE.Mesh(geo, mat);
       cloud.scale.set(5 + r() * 5, 1.3 + r() * 0.7, 2.5 + r() * 2);
@@ -364,7 +386,9 @@ export class SceneManager {
   }
 
   private buildWater(): THREE.Mesh {
-    const geo = new THREE.PlaneGeometry(WATER_SIZE, WATER_SIZE, WATER_SEGMENTS, WATER_SEGMENTS).rotateX(-Math.PI / 2);
+    const geo = new THREE.PlaneGeometry(WATER_SIZE, WATER_SIZE, WATER_SEGMENTS, WATER_SEGMENTS).rotateX(
+      -Math.PI / 2,
+    );
     const mat = new THREE.MeshStandardMaterial({
       color: '#3fa7ff',
       transparent: true,
