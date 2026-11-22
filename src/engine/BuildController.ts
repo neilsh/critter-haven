@@ -4,7 +4,7 @@
  * material instance from `assets.createMaterial` so the physics X-ray can tint meshes individually.
  * Graph changes must go through `commit`-style methods so undo history stays correct.
  */
-import * as THREE from 'three';
+import type * as THREE from 'three';
 import type { BlueprintGraph, MaterialType, PresetName, ToolType, Vec3 } from '../types/blueprint';
 import { emptyGraph } from '../types/blueprint';
 import type { AudioSynth, ProceduralAssets } from './ProceduralAssets';
@@ -25,6 +25,7 @@ export class BuildController {
   private graph: BlueprintGraph = emptyGraph();
   private listeners = new Set<() => void>();
 
+  // oxlint-disable-next-line no-useless-constructor -- stub; package C implements this
   constructor(_scene: SceneManager, _assets: ProceduralAssets, _audio: AudioSynth) {}
 
   /** Current graph (treat as read-only). */

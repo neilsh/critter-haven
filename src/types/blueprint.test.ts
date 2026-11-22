@@ -57,11 +57,11 @@ describe('blueprint helpers', () => {
     expect(mirrorCellX(mirrorCellX(c))).toEqual(c);
     const mirroredCorners = cellCorners(mirrorCellX(c))
       .map((k) => k.join())
-      .sort();
+      .toSorted();
     expect(
       cellCorners(c)
         .map((k) => mirrorCornerX(k).join())
-        .sort(),
+        .toSorted(),
     ).toEqual(mirroredCorners);
     expect(cellToWorld(mirrorCellX(c))[0]).toBe(-cellToWorld(c)[0]);
   });

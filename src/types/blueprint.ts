@@ -171,7 +171,7 @@ export function blocksAtCorner(g: BlueprintGraph, k: Vec3): BlockData[] {
         [0, 1].includes(k[1] - b.cell[1]) &&
         [0, 1].includes(k[2] - b.cell[2]),
     )
-    .sort((p, q) => (p.id < q.id ? -1 : p.id > q.id ? 1 : 0));
+    .toSorted((p, q) => (p.id < q.id ? -1 : p.id > q.id ? 1 : 0));
 }
 
 /** True when a strut a-b obeys the validity rules above against graph `g`. */

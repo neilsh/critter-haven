@@ -7,7 +7,9 @@ export function App() {
   const [game, setGame] = useState<Game | null>(null);
 
   useEffect(() => {
-    const g = new Game(container.current!);
+    const el = container.current;
+    if (!el) return;
+    const g = new Game(el);
     setGame(g);
     return () => {
       g.dispose();
