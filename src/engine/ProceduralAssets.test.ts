@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { AudioSynth, ProceduralAssets } from './ProceduralAssets';
-import { MATERIALS, type MaterialType } from '../types/blueprint';
+import { MATERIALS, MATERIAL_ORDER } from '../types/blueprint';
 
 describe('ProceduralAssets (headless)', () => {
   it('builds a shared rounded block that fits the 2-unit grid with a small gap', () => {
@@ -32,7 +32,7 @@ describe('ProceduralAssets (headless)', () => {
 
   it('returns a new material per call, falling back to the flat colour without a DOM', () => {
     const assets = new ProceduralAssets();
-    for (const type of Object.keys(MATERIALS) as MaterialType[]) {
+    for (const type of MATERIAL_ORDER) {
       const a = assets.createMaterial(type);
       const b = assets.createMaterial(type);
       expect(a).not.toBe(b);

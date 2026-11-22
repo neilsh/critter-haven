@@ -28,7 +28,9 @@ export function Banners() {
           Oh no, it fell down!
         </span>
         <span className="text-sm font-bold">
-          {s.firstBrokenId ? 'Look for the glowing piece that snapped first.' : 'Rewind and try a stronger design.'}
+          {s.firstBrokenId
+            ? 'Look for the glowing piece that snapped first.'
+            : 'Rewind and try a stronger design.'}
         </span>
       </div>
     );
