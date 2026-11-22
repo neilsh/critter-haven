@@ -74,7 +74,7 @@ export class BuildController {
   private readonly raycaster = new THREE.Raycaster();
   private readonly ndc = new THREE.Vector2();
   private pointer: { x: number; y: number } | null = null;
-  private pressed: { x: number; y: number; corner: Vec3 | null } | null = null;
+  private pressed: { x: number; y: number; id: number } | null = null;
   private braceStart: Vec3 | null = null;
   private hoverPiece: THREE.Mesh | null = null;
   private highlightId: string | null = null;
@@ -84,6 +84,8 @@ export class BuildController {
   private readonly blockGhosts: THREE.Mesh[] = [];
   private readonly strutGhosts: THREE.Mesh[] = [];
   private readonly cornerMarker: THREE.Mesh;
+  /** Subtle grid over the island footprint at the height the block ghost would land on. */
+  private readonly levelGrid: THREE.GridHelper;
   private readonly ghostMats: THREE.MeshBasicMaterial[] = [];
   private readonly ownGeometries: THREE.BufferGeometry[] = [];
 
@@ -109,6 +111,13 @@ export class BuildController {
     this.cornerMarker = new THREE.Mesh(markerGeo, good);
     this.cornerMarker.visible = false;
     this.ghostRoot.add(this.cornerMarker);
+    this.levelGrid = new THREE.GridHelper(ISLAND_SIZE, GRID_CELLS, 0xffffff, 0xffffff);
+    const gridMat = this.levelGrid.material as THREE.LineBasicMaterial;
+    gridMat.transparent = true;
+    gridMat.opacity = 0.25;
+    gridMat.depthWrite = false;
+    this.levelGrid.visible = false;
+    this.ghostRoot.add(this.levelGrid);
     for (let i = 0; i < 2; i++) {
       const bg = new THREE.Mesh(assets.getBlockGeometry(), good);
       const sg = new THREE.Mesh(assets.getStrutGeometry(), good);
@@ -242,6 +251,7 @@ export class BuildController {
     this.meshes.struts.clear();
     this.sceneMgr.scene.remove(this.ghostRoot);
     this.ghostMats.forEach((m) => m.dispose());
+    this.levelGrid.dispose();
     this.ownGeometries.forEach((g) => g.dispose());
     this.listeners.clear();
   }
@@ -426,7 +436,7 @@ export class BuildController {
     let bestScore = Infinity;
     for (const k of this.corners.values()) {
       v.set(...cornerToWorld(k)).project(cam);
-      if (v.z > 1) continue;
+      if (v.z > 1 || v.z < -1) continue; // outside the view frustum's depth range
       const sx = rect.left + ((v.x + 1) / 2) * rect.width;
       const sy = rect.top + ((1 - v.y) / 2) * rect.height;
       const d = Math.hypot(sx - x, sy - y);
@@ -472,22 +482,25 @@ export class BuildController {
 
   private onPointerDown(e: PointerEvent): void {
     if (!this.enabled || e.button > 0) return;
+    // A second finger means pinch/orbit, never a click or brace: drop whatever the first one started.
+    if (e.isPrimary === false) return this.cancelDrag();
     this.pointer = { x: e.clientX, y: e.clientY };
-    let corner: Vec3 | null = null;
     if (this.tool === 'brace') {
-      corner = this.pickCorner(e.clientX, e.clientY);
+      const corner = this.pickCorner(e.clientX, e.clientY);
       if (corner) {
         this.braceStart = corner;
         this.sceneMgr.setControlsEnabled(false);
-        e.stopPropagation();
+        // Keep receiving moves/up even if the drag leaves the canvas, so controls are always re-enabled.
+        if (e.pointerId !== undefined) this.dom?.setPointerCapture?.(e.pointerId);
+        e.stopImmediatePropagation();
       }
     }
-    this.pressed = { x: e.clientX, y: e.clientY, corner };
+    this.pressed = { x: e.clientX, y: e.clientY, id: e.pointerId };
     this.updatePreview();
   }
 
   private onPointerMove(e: PointerEvent): void {
-    if (!this.enabled) return;
+    if (!this.enabled || e.isPrimary === false) return;
     this.pointer = { x: e.clientX, y: e.clientY };
     this.updatePreview();
   }
@@ -498,7 +511,9 @@ export class BuildController {
   }
 
   private onPointerUp(e: PointerEvent): void {
+    if (e.isPrimary === false) return;
     const pressed = this.pressed;
+    this.releaseCapture();
     this.pressed = null;
     if (!this.enabled || !pressed) return this.cancelDrag();
     this.pointer = { x: e.clientX, y: e.clientY };
@@ -531,7 +546,13 @@ export class BuildController {
     this.updatePreview();
   }
 
+  private releaseCapture(): void {
+    const id = this.pressed?.id;
+    if (id !== undefined && this.dom?.hasPointerCapture?.(id)) this.dom.releasePointerCapture(id);
+  }
+
   private cancelDrag(): void {
+    this.releaseCapture();
     if (this.braceStart) this.sceneMgr.setControlsEnabled(true);
     this.braceStart = null;
     this.pressed = null;
@@ -600,7 +621,7 @@ export class BuildController {
   // ------------------------------------------------------------------ previews
 
   private updatePreview(): void {
-    for (const g of [...this.blockGhosts, ...this.strutGhosts, this.cornerMarker]) g.visible = false;
+    for (const g of [...this.blockGhosts, ...this.strutGhosts, this.cornerMarker, this.levelGrid]) g.visible = false;
     if (this.hoverPiece) {
       const info = this.hoverPiece.userData.piece as PieceInfo;
       if (info.id !== this.highlightId) this.setEmissive(this.hoverPiece, 0x000000);
@@ -622,6 +643,9 @@ export class BuildController {
         ghost.position.set(...cellToWorld(c));
         ghost.visible = true;
       });
+      // Lift the ground-level grid a hair so it doesn't z-fight with the island top.
+      this.levelGrid.position.y = Math.max(cell[1] * CELL_SIZE, 0.02);
+      this.levelGrid.visible = cellInBounds(cell);
     } else if (this.tool === 'brace') {
       const hover = this.pickCorner(x, y);
       const start = this.braceStart;

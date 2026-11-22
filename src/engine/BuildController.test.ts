@@ -26,18 +26,27 @@ function setup() {
     setControlsEnabled: (e: boolean) => (controls = e),
   } as unknown as SceneManager;
   const bc = new BuildController(scene, new ProceduralAssets(), new AudioSynth());
-  const fire = (type: string, x: number, y: number) => {
+  const captured = new Set<number>();
+  Object.assign(dom, {
+    setPointerCapture: (id: number) => captured.add(id),
+    releasePointerCapture: (id: number) => captured.delete(id),
+    hasPointerCapture: (id: number) => captured.has(id),
+  });
+  const fire = (type: string, x: number, y: number, extra: Record<string, unknown> = {}) => {
     const e = new Event(type) as any;
     e.clientX = x;
     e.clientY = y;
     e.button = 0;
+    e.pointerId = 1;
+    e.isPrimary = true;
+    Object.assign(e, extra);
     dom.dispatchEvent(e);
   };
   const screen = (p: [number, number, number]) => {
     const v = new THREE.Vector3(...p).project(camera);
     return [((v.x + 1) / 2) * 800, ((1 - v.y) / 2) * 600] as const;
   };
-  return { bc, fire, screen, controls: () => controls, frame, scene };
+  return { bc, fire, screen, controls: () => controls, frame, scene, captured };
 }
 
 describe('BuildController', () => {
@@ -149,5 +158,32 @@ describe('BuildController', () => {
     fire('pointerdown', p[0], p[1]);
     fire('pointerup', p[0], p[1]);
     expect(bc.getGraph().blocks).toHaveLength(0);
+  });
+
+  it('brace drag captures the pointer; a second finger cancels it', () => {
+    const { bc, fire, screen, controls, captured } = setup();
+    bc.placeBlock([1, 0, 4], 'wood');
+    bc.setTool('brace');
+    const a = screen(cornerToWorld([1, 0, 4]));
+    const b = screen(cornerToWorld([2, 1, 4]));
+    fire('pointerdown', a[0], a[1]);
+    expect(captured.has(1)).toBe(true);
+    fire('pointerdown', b[0], b[1], { pointerId: 2, isPrimary: false });
+    expect(controls()).toBe(true);
+    expect(captured.size).toBe(0);
+    fire('pointerup', b[0], b[1]);
+    expect(bc.getGraph().struts).toHaveLength(0);
+  });
+
+  it('shows the level grid at the height a block would land on', () => {
+    const { bc, fire, screen } = setup();
+    bc.placeBlock([3, 0, 3], 'wood');
+    const grid = (bc as unknown as { levelGrid: THREE.Object3D }).levelGrid;
+    const top = screen([-1, 2, -1]); // top face of the block
+    fire('pointermove', top[0], top[1]);
+    expect(grid.visible).toBe(true);
+    expect(grid.position.y).toBe(2);
+    bc.setTool('erase');
+    expect(grid.visible).toBe(false);
   });
 });
