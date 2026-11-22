@@ -26,7 +26,6 @@ function setup() {
   islandTop.updateMatrixWorld();
   let controls = true;
   const frame: Array<(dt: number) => void> = [];
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- minimal headless stand-in for SceneManager
   const scene = {
     scene: new THREE.Scene(),
     camera,

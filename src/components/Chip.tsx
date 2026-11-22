@@ -20,7 +20,16 @@ const VARIANTS = {
 };
 
 /** Big, friendly, icon-plus-word button. Touch target is at least 48px. */
-export function Chip({ testId, label, icon, active, disabled, onClick, variant = 'default', className = '' }: ChipProps) {
+export function Chip({
+  testId,
+  label,
+  icon,
+  active,
+  disabled,
+  onClick,
+  variant = 'default',
+  className = '',
+}: ChipProps) {
   const tone = active ? 'bg-amber-300 text-amber-950 ring-4 ring-white' : VARIANTS[variant];
   return (
     <button
@@ -41,5 +50,11 @@ export function Chip({ testId, label, icon, active, disabled, onClick, variant =
 
 export function Swatch({ color }: { color: number }) {
   const hex = `#${color.toString(16).padStart(6, '0')}`;
-  return <span aria-hidden className="block h-6 w-6 rounded-full border-2 border-white shadow-inner" style={{ backgroundColor: hex }} />;
+  return (
+    <span
+      aria-hidden
+      className="block h-6 w-6 rounded-full border-2 border-white shadow-inner"
+      style={{ backgroundColor: hex }}
+    />
+  );
 }

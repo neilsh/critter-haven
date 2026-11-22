@@ -64,7 +64,10 @@ const PAINTERS: Record<MaterialType, Painter> = {
     g.fillStyle = base;
     g.fillRect(0, 0, S, S);
     for (let i = 0; i < 900; i++) {
-      g.fillStyle = rnd() < 0.5 ? `rgba(255,255,255,${(0.1 + rnd() * 0.2).toFixed(2)})` : `rgba(20,20,25,${(0.1 + rnd() * 0.25).toFixed(2)})`;
+      g.fillStyle =
+        rnd() < 0.5
+          ? `rgba(255,255,255,${(0.1 + rnd() * 0.2).toFixed(2)})`
+          : `rgba(20,20,25,${(0.1 + rnd() * 0.25).toFixed(2)})`;
       g.beginPath();
       g.arc(rnd() * S, rnd() * S, 0.5 + rnd() * 2.5, 0, Math.PI * 2);
       g.fill();
@@ -111,7 +114,14 @@ export class ProceduralAssets {
 
   /** Rounded toy-block geometry, 2x2x2 world units minus a small gap. Shared; do not dispose per mesh. */
   getBlockGeometry(): THREE.BufferGeometry {
-    if (!this.blockGeometry) this.blockGeometry = new RoundedBoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE, BLOCK_SEGMENTS, BLOCK_RADIUS);
+    if (!this.blockGeometry)
+      this.blockGeometry = new RoundedBoxGeometry(
+        BLOCK_SIZE,
+        BLOCK_SIZE,
+        BLOCK_SIZE,
+        BLOCK_SEGMENTS,
+        BLOCK_RADIUS,
+      );
     return this.blockGeometry;
   }
 
@@ -120,7 +130,8 @@ export class ProceduralAssets {
    * mesh.scale.y to the strut length and orient it between the two endpoints.
    */
   getStrutGeometry(): THREE.BufferGeometry {
-    if (!this.strutGeometry) this.strutGeometry = new THREE.CylinderGeometry(STRUT_RADIUS, STRUT_RADIUS, 1, 12);
+    if (!this.strutGeometry)
+      this.strutGeometry = new THREE.CylinderGeometry(STRUT_RADIUS, STRUT_RADIUS, 1, 12);
     return this.strutGeometry;
   }
 
@@ -179,7 +190,12 @@ export class AudioSynth {
   private noise: AudioBuffer | null = null;
   private wind: { source: AudioBufferSourceNode; filter: BiquadFilterNode; gain: GainNode } | null = null;
   private lastOneShot = new Map<string, number>();
-  private rumble: { source: AudioBufferSourceNode; osc: OscillatorNode; filter: BiquadFilterNode; gain: GainNode } | null = null;
+  private rumble: {
+    source: AudioBufferSourceNode;
+    osc: OscillatorNode;
+    filter: BiquadFilterNode;
+    gain: GainNode;
+  } | null = null;
 
   /** Call from a user gesture; browsers keep the AudioContext suspended until then. */
   resume(): void {
@@ -376,7 +392,14 @@ export class AudioSynth {
     source.stop(t + duration + 0.02);
   }
 
-  private tone(type: OscillatorType, fromHz: number, toHz: number, duration: number, peak: number, delay = 0): void {
+  private tone(
+    type: OscillatorType,
+    fromHz: number,
+    toHz: number,
+    duration: number,
+    peak: number,
+    delay = 0,
+  ): void {
     const ready = this.ready();
     if (!ready) return;
     const { ctx, master } = ready;
