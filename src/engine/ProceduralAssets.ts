@@ -3,15 +3,18 @@
  * Must not fetch any external file: textures come from CanvasTexture, sounds from Web Audio.
  */
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import type { MaterialType } from '../types/blueprint';
 import { MATERIALS } from '../types/blueprint';
 
 const BLOCK_SIZE = 1.96;
 const BLOCK_RADIUS = 0.22;
-const BLOCK_SEGMENTS = 8;
+const BLOCK_SEGMENTS = 4;
 const STRUT_RADIUS = 0.15;
 const TEXTURE_SIZE = 256;
 const MASTER_VOLUME = 0.6;
+/** One-shot sounds closer together than this are dropped, so a cascade of snaps stays a crackle. */
+const MIN_ONE_SHOT_GAP = 0.04;
 
 const ROUGHNESS: Record<MaterialType, number> = { wood: 0.7, stone: 0.9, bamboo: 0.5, foam: 0.85 };
 const TEXTURE_SEEDS: Record<MaterialType, number> = { wood: 11, stone: 23, bamboo: 37, foam: 53 };
@@ -28,35 +31,6 @@ function mulberry32(seed: number): () => number {
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
-}
-
-/** A box whose edges and corners are rounded by pushing box vertices onto a radius-r shell. */
-function roundedBoxGeometry(size: number, radius: number, segments: number): THREE.BufferGeometry {
-  const geo = new THREE.BoxGeometry(size, size, size, segments, segments, segments);
-  const inner = size / 2 - radius;
-  const pos = geo.attributes.position as THREE.BufferAttribute;
-  const nor = geo.attributes.normal as THREE.BufferAttribute;
-  const p = new THREE.Vector3();
-  const c = new THREE.Vector3();
-  const n = new THREE.Vector3();
-  for (let i = 0; i < pos.count; i++) {
-    p.fromBufferAttribute(pos, i);
-    c.set(clamp(p.x, -inner, inner), clamp(p.y, -inner, inner), clamp(p.z, -inner, inner));
-    n.subVectors(p, c);
-    if (n.lengthSq() > 1e-10) {
-      n.normalize();
-      p.copy(c).addScaledVector(n, radius);
-    } else {
-      n.fromBufferAttribute(nor, i);
-    }
-    pos.setXYZ(i, p.x, p.y, p.z);
-    nor.setXYZ(i, n.x, n.y, n.z);
-  }
-  pos.needsUpdate = true;
-  nor.needsUpdate = true;
-  geo.computeBoundingSphere();
-  geo.computeBoundingBox();
-  return geo;
 }
 
 const hex = (color: number) => `#${color.toString(16).padStart(6, '0')}`;
@@ -137,7 +111,7 @@ export class ProceduralAssets {
 
   /** Rounded toy-block geometry, 2x2x2 world units minus a small gap. Shared; do not dispose per mesh. */
   getBlockGeometry(): THREE.BufferGeometry {
-    if (!this.blockGeometry) this.blockGeometry = roundedBoxGeometry(BLOCK_SIZE, BLOCK_RADIUS, BLOCK_SEGMENTS);
+    if (!this.blockGeometry) this.blockGeometry = new RoundedBoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE, BLOCK_SEGMENTS, BLOCK_RADIUS);
     return this.blockGeometry;
   }
 
@@ -204,6 +178,7 @@ export class AudioSynth {
   private master: GainNode | null = null;
   private noise: AudioBuffer | null = null;
   private wind: { source: AudioBufferSourceNode; filter: BiquadFilterNode; gain: GainNode } | null = null;
+  private lastOneShot = new Map<string, number>();
   private rumble: { source: AudioBufferSourceNode; osc: OscillatorNode; filter: BiquadFilterNode; gain: GainNode } | null = null;
 
   /** Call from a user gesture; browsers keep the AudioContext suspended until then. */
@@ -224,25 +199,31 @@ export class AudioSynth {
   }
 
   playClack(): void {
+    if (!this.allowOneShot('clack')) return;
     this.noiseHit('bandpass', 2200, 3, 0.05, 0.5);
     this.tone('sine', 900, 500, 0.03, 0.15);
   }
 
   playBraceStretch(): void {
+    if (!this.allowOneShot('stretch')) return;
     this.tone('sawtooth', 180, 320, 0.3, 0.08);
     this.noiseHit('bandpass', 900, 1.5, 0.25, 0.12);
   }
 
   playJointSnap(): void {
+    if (!this.allowOneShot('snap')) return;
     this.noiseHit('highpass', 2500, 1, 0.08, 0.7);
     this.tone('square', 320, 110, 0.12, 0.18);
   }
 
   /** intensity 0..1 */
   playWind(intensity: number): void {
-    const ready = this.ready();
-    if (!ready) return;
     const v = clamp(intensity, 0, 1);
+    // Loops follow the latest intensity even while muted (the master bus handles muting), so a
+    // playWind(0) sent while muted still stops the loop and it does not come back on unmute.
+    if (!this.wind && (v === 0 || this.muted)) return;
+    const ready = this.bus();
+    if (!ready) return;
     if (!this.wind) {
       const { ctx, master } = ready;
       const source = ctx.createBufferSource();
@@ -264,9 +245,12 @@ export class AudioSynth {
 
   /** intensity 0..1 */
   playRumble(intensity: number): void {
-    const ready = this.ready();
-    if (!ready) return;
     const v = clamp(intensity, 0, 1);
+    // Loops follow the latest intensity even while muted (the master bus handles muting), so a
+    // playRumble(0) sent while muted still stops the loop and it does not come back on unmute.
+    if (!this.rumble && (v === 0 || this.muted)) return;
+    const ready = this.bus();
+    if (!ready) return;
     if (!this.rumble) {
       const { ctx, master } = ready;
       const source = ctx.createBufferSource();
@@ -294,6 +278,7 @@ export class AudioSynth {
   }
 
   playVictory(): void {
+    if (!this.allowOneShot('victory')) return;
     const notes = [523.25, 659.25, 783.99, 1046.5];
     notes.forEach((f, i) => this.tone('triangle', f, f * 1.005, 0.5, 0.25, i * 0.13));
   }
@@ -327,7 +312,7 @@ export class AudioSynth {
   private getContext(): AudioContext | null {
     if (this.ctx) return this.ctx;
     if (typeof window === 'undefined') return null;
-    const w = window as Window & { webkitAudioContext?: typeof AudioContext };
+    const w = globalThis as typeof globalThis & { webkitAudioContext?: typeof AudioContext };
     const Ctor = w.AudioContext ?? w.webkitAudioContext;
     if (!Ctor) return null;
     const ctx = new Ctor();
@@ -339,12 +324,26 @@ export class AudioSynth {
     return ctx;
   }
 
-  /** Context and output bus for a sound, or null when there is no audio or the sound is muted. */
+  /** Context and output bus for a one-shot, or null when there is no audio or the sound is muted. */
   private ready(): Ready | null {
     if (this.muted) return null;
+    return this.bus();
+  }
+
+  /** Context and output bus regardless of mute, or null when there is no Web Audio. */
+  private bus(): Ready | null {
     const ctx = this.getContext();
     if (!ctx || !this.master) return null;
     return { ctx, master: this.master };
+  }
+
+  private allowOneShot(key: string): boolean {
+    const ctx = this.ctx;
+    if (this.muted || !ctx) return !this.muted;
+    const last = this.lastOneShot.get(key) ?? -Infinity;
+    if (ctx.currentTime - last < MIN_ONE_SHOT_GAP) return false;
+    this.lastOneShot.set(key, ctx.currentTime);
+    return true;
   }
 
   private noiseBuffer(ctx: AudioContext): AudioBuffer {
