@@ -4,10 +4,17 @@
  */
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import type { BlueprintGraph, DisasterType, MaterialType, StrutData, Vec3 } from '../types/blueprint';
+import type {
+  BlueprintGraph,
+  DisasterType,
+  MaterialType,
+  Strength,
+  StrutData,
+  Vec3,
+} from '../types/blueprint';
 import { DISASTER_SECONDS, PRESETS, blockId, cellToWorld, cornerToWorld, strutId } from '../types/blueprint';
 import type { MeshRegistry } from './BuildController';
-import { PHYSICS_TUNING, PhysicsSim } from './PhysicsSim';
+import { PHYSICS_TUNING, PhysicsSim, starsFor } from './PhysicsSim';
 
 const SEEDS = [1, 2, 3, 4, 5];
 
@@ -34,7 +41,9 @@ function meshesFor(g: BlueprintGraph, parent = new THREE.Group()): MeshRegistry 
   return reg;
 }
 
-async function simulate(g: BlueprintGraph, disaster: DisasterType, seed = 1) {
+const DISASTERS = ['earthquake', 'hurricane', 'flood', 'hail'] as const;
+
+async function simulate(g: BlueprintGraph, disaster: DisasterType, seed = 1, strength?: Strength) {
   const sim = new PhysicsSim();
   const breaks: string[] = [];
   const water: number[] = [];
@@ -45,9 +54,25 @@ async function simulate(g: BlueprintGraph, disaster: DisasterType, seed = 1) {
     onWaterLevel: (y) => water.push(y),
   });
   const meshes = meshesFor(g);
-  await sim.start(g, meshes, disaster, seed);
-  for (let f = 0; sim.isRunning() && f < 60 * (DISASTER_SECONDS + 1); f++) sim.update(1 / 60);
-  return { sim, t: sim.getTelemetry(), peak: sim.getPeakStrain(), breaks, water, survived, meshes };
+  await sim.start(g, meshes, disaster, seed, strength);
+  const standing: number[] = [];
+  const stars: number[] = [];
+  for (let f = 0; sim.isRunning() && f < 60 * (DISASTER_SECONDS + 1); f++) {
+    sim.update(1 / 60);
+    standing.push(sim.getTelemetry().standingRatio);
+    stars.push(sim.getTelemetry().stars);
+  }
+  return {
+    sim,
+    t: sim.getTelemetry(),
+    peak: sim.getPeakStrain(),
+    breaks,
+    water,
+    survived,
+    meshes,
+    standing,
+    stars,
+  };
 }
 
 function strut(a: Vec3, b: Vec3, material: MaterialType = 'bamboo'): StrutData {
@@ -261,5 +286,114 @@ describe('stress X-ray and meshes', () => {
     expect(r.breaks).toContain(id);
     // Its mesh no longer spans the wall (centre was at y = 2): it fell onto the island.
     expect(r.meshes.struts.get(id)?.position.y ?? 99).toBeLessThan(1);
+  });
+});
+
+describe('star scoring', () => {
+  it('maps broken joints and standing ratio onto 0-3 stars', () => {
+    expect(starsFor(0, 1)).toBe(3);
+    expect(starsFor(0, 0.4)).toBe(3); // no joint broke: a loose block that slid off does not cost stars
+    expect(starsFor(1, 1)).toBe(2);
+    expect(starsFor(3, 0.8)).toBe(2);
+    expect(starsFor(3, 0.79)).toBe(1);
+    expect(starsFor(3, 0.5)).toBe(1);
+    expect(starsFor(3, 0.49)).toBe(0);
+    expect(starsFor(3, 0)).toBe(0);
+  });
+
+  it('an empty island scores 3 stars with everything standing', async () => {
+    const r = await simulate(PRESETS.empty(), 'earthquake');
+    expect(r.t).toMatchObject({ standingRatio: 1, stars: 3 });
+  });
+
+  it.each(DISASTERS)('the starter house keeps 3 stars throughout a %s', async (d) => {
+    const r = await simulate(PRESETS.house(), d);
+    expect(r.t).toMatchObject({ mode: 'survived', standingRatio: 1, stars: 3 });
+    expect(new Set(r.stars)).toEqual(new Set([3]));
+  });
+
+  it.each(SEEDS)('a collapsed tower scores 0 stars and standing only falls (seed %i)', async (seed) => {
+    const r = await simulate(PRESETS.tower(), 'earthquake', seed);
+    // Only the bottom block stays put; the top three come loose and topple.
+    expect(r.t).toMatchObject({ mode: 'failed', standingRatio: 0.25, stars: 0 });
+    expect(r.standing.every((x, i) => i === 0 || x <= r.standing[i - 1])).toBe(true);
+    expect(r.stars[0]).toBe(3); // nothing has broken yet on the first step
+  });
+
+  it.each([2, 3, 4, 5])(
+    'partial damage earns partial credit (gentle hail on the tower, seed %i)',
+    async (seed) => {
+      // One cracked joint, but three of four blocks still in place.
+      const r = await simulate(PRESETS.tower(), 'hail', seed, 'gentle');
+      expect(r.t).toMatchObject({ mode: 'failed', brokenJoints: 1, standingRatio: 0.75, stars: 1 });
+    },
+  );
+
+  it('broken struts and the blocks they hung from stop counting as standing', async () => {
+    // Braced tower in a medium quake: an anchor gives way and the whole tower topples.
+    const r = await simulate(bracedTower(), 'earthquake', 1);
+    expect(r.t.mode).toBe('failed');
+    expect(r.t.standingRatio).toBeLessThan(0.5);
+    expect(r.t.stars).toBe(0);
+  });
+});
+
+const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+const peaks = async (g: () => BlueprintGraph, d: DisasterType, strength: Strength) =>
+  Promise.all(SEEDS.map(async (seed) => (await simulate(g(), d, seed, strength)).peak.strain));
+
+/** Most hail stones alive at once during a run on the house. */
+async function maxHail(strength: Strength) {
+  const root = new THREE.Group();
+  const sim = new PhysicsSim();
+  sim.setEffectsRoot(root);
+  const g = PRESETS.house();
+  await sim.start(g, meshesFor(g), 'hail', 1, strength);
+  let max = 0;
+  while (sim.isRunning()) {
+    sim.update(1 / 60);
+    max = Math.max(max, root.children.length);
+  }
+  sim.stop();
+  return max;
+}
+
+describe('strength levels', () => {
+  it('medium is the default', async () => {
+    const a = await simulate(PRESETS.house(), 'hurricane', 3);
+    const b = await simulate(PRESETS.house(), 'hurricane', 3, 'medium');
+    expect(b.peak.strain).toBe(a.peak.strain);
+  });
+
+  it.each(DISASTERS)('%s: stronger disasters strain the house more', async (d) => {
+    const [gentle, medium, strong] = await Promise.all(
+      (['gentle', 'medium', 'strong'] as const).map(async (s) => mean(await peaks(PRESETS.house, d, s))),
+    );
+    expect(gentle).toBeLessThan(medium);
+    expect(medium).toBeLessThan(strong);
+  });
+
+  it.each(SEEDS)(
+    'gentle: the house survives every disaster and flood spares even the tower (seed %i)',
+    async (seed) => {
+      const runs = await Promise.all(DISASTERS.map((d) => simulate(PRESETS.house(), d, seed, 'gentle')));
+      for (const r of runs) expect(r.t).toMatchObject({ mode: 'survived', stars: 3 });
+      expect((await simulate(PRESETS.tower(), 'flood', seed, 'gentle')).t.mode).toBe('survived');
+    },
+  );
+
+  it.each(SEEDS)(
+    'strong: the house still survives a quake, the tower fails everything (seed %i)',
+    async (seed) => {
+      const house = await simulate(PRESETS.house(), 'earthquake', seed, 'strong');
+      expect(house.t.mode).toBe('survived');
+      expect(house.peak.strain).toBeLessThan(0.8);
+      const towers = await Promise.all(DISASTERS.map((d) => simulate(PRESETS.tower(), d, seed, 'strong')));
+      for (const r of towers) expect(r.t).toMatchObject({ mode: 'failed', stars: 0 });
+    },
+  );
+
+  it('strong hail drops more stones than gentle hail', async () => {
+    expect(await maxHail('strong')).toBeGreaterThan((await maxHail('gentle')) * 1.5);
   });
 });

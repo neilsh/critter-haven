@@ -19,7 +19,7 @@ export interface UIState {
   mode: GameMode;
   /** Seconds left in the disaster countdown (DISASTER_SECONDS when idle). */
   timeRemaining: number;
-  /** Fraction of joints still intact (1 while building). */
+  /** Fraction (0..1) of pieces still standing (see Telemetry.standingRatio); 1 while building. */
   standingRatio: number;
   /** Star rating of the current/finished run (0 while building). */
   stars: Stars;
