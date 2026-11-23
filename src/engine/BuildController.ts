@@ -31,6 +31,7 @@ import {
   mirrorCornerX,
   strutId,
 } from '../types/blueprint';
+import { canAddBlock, isMaterialAllowed } from '../levels/constraints';
 import type { AudioSynth, ProceduralAssets } from './ProceduralAssets';
 import type { SceneManager } from './SceneManager';
 
@@ -227,7 +228,9 @@ export class BuildController {
 
   /**
    * Limits for challenge levels (max block count, allowed materials). Undefined fields mean no limit;
-   * `null` clears all constraints. CONTRACT STUB: not enforced yet.
+   * `null` clears all constraints. Enforced for every edit path (pointer tools, mirror, programmatic):
+   * a block over the limit or a piece in a disallowed material is simply rejected. Pieces already on the
+   * island (such as a level's starting build) are never removed.
    */
   setConstraints(c: BuildConstraints | null): void {
     this.constraints = c;
@@ -307,12 +310,15 @@ export class BuildController {
 
   private addBlockTo(g: BlueprintGraph, cell: Vec3, material: MaterialType): boolean {
     if (!cellInBounds(cell) || g.blocks.some((b) => sameVec(b.cell, cell))) return false;
+    if (!isMaterialAllowed(this.constraints, material) || !canAddBlock(this.constraints, g.blocks.length)) {
+      return false;
+    }
     g.blocks.push({ id: blockId(cell), cell: [...cell], material });
     return true;
   }
 
   private addStrutTo(g: BlueprintGraph, a: Vec3, b: Vec3, material: MaterialType): boolean {
-    if (!isStrutValid(g, a, b)) return false;
+    if (!isStrutValid(g, a, b) || !isMaterialAllowed(this.constraints, material)) return false;
     const id = strutId(a, b);
     if (g.struts.some((s) => s.id === id)) return false;
     const [p, q] = key(a) <= key(b) ? [a, b] : [b, a];
@@ -331,7 +337,7 @@ export class BuildController {
 
   private paintIn(g: BlueprintGraph, kind: MeshKind, id: string, material: MaterialType): boolean {
     const piece = (kind === 'block' ? g.blocks : g.struts).find((p) => p.id === id);
-    if (!piece || piece.material === material) return false;
+    if (!piece || piece.material === material || !isMaterialAllowed(this.constraints, material)) return false;
     piece.material = material;
     return true;
   }

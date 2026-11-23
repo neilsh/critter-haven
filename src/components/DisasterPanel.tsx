@@ -24,6 +24,8 @@ const DISASTERS: Record<DisasterType, { label: string; icon: ReactNode }> = {
 export function DisasterPanel({ actions }: { actions: GameActions }) {
   const s = useUIState();
   const building = s.mode === 'build';
+  // A challenge level fixes its own disaster and strength.
+  const canPick = building && s.levelId === null;
   // Idle shows the full countdown; a finished run shows 0 instead of jumping back to 8.
   const seconds = building
     ? DISASTER_SECONDS
@@ -44,7 +46,7 @@ export function DisasterPanel({ actions }: { actions: GameActions }) {
             label={DISASTERS[d].label}
             icon={DISASTERS[d].icon}
             active={s.disaster === d}
-            disabled={!building}
+            disabled={!canPick}
             onClick={() => actions.setDisaster(d)}
           />
         ))}
@@ -57,7 +59,7 @@ export function DisasterPanel({ actions }: { actions: GameActions }) {
             testId={`strength-${st}`}
             label={STRENGTHS[st]}
             active={s.strength === st}
-            disabled={!building}
+            disabled={!canPick}
             onClick={() => actions.setStrength(st)}
           />
         ))}
