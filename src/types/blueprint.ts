@@ -291,6 +291,12 @@ export interface GameDebugApi {
   /** Resolves once Rapier is initialised and the first step can run. */
   startDisaster(type: DisasterType, seed?: number, strength?: Strength): Promise<void>;
   rewind(): void;
+  /**
+   * Runs a started disaster up to `seconds` of sim time ahead synchronously, in the same fixed steps
+   * the frame loop would take, and returns the telemetry afterwards. Stops early when the run ends.
+   * Lets tests finish a run without waiting on (slow, software-rendered) frames.
+   */
+  advance(seconds: number): Telemetry;
   getTelemetry(): Telemetry;
 }
 
