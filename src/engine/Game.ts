@@ -19,9 +19,12 @@ import type {
   Vec3,
 } from '../types/blueprint';
 import type { GameActions } from '../types/ui';
-import { DISASTER_SECONDS } from '../types/blueprint';
+import { DISASTER_SECONDS, emptyGraph } from '../types/blueprint';
 import { uiStore } from '../state/store';
-import { getLevel } from '../levels/levels';
+import { buildHeight, isMaterialAllowed } from '../levels/constraints';
+import { levelStore } from '../levels/levelStore';
+import { LEVELS, getLevel } from '../levels/levels';
+import { computeUnlocked, loadBest, recordResult, saveBest } from '../levels/progress';
 import { BuildController } from './BuildController';
 import { PhysicsSim } from './PhysicsSim';
 import { AudioSynth, ProceduralAssets } from './ProceduralAssets';
@@ -61,10 +64,33 @@ export class Game implements GameActions, GameDebugApi {
       onWaterLevel: (y) => this.scene.setWaterLevel(y),
     });
 
+    const best = loadBest(LEVELS);
+    levelStore.setState({ best });
+    uiStore.setState({ unlocked: computeUnlocked(LEVELS, best) });
+
     this.cleanups.push(
       this.scene.onFrame((dt) => this.tick(dt)),
-      this.build.subscribe(() => uiStore.setState({ canUndo: this.build.canUndo() })),
+      this.build.subscribe(() => {
+        const g = this.build.getGraph();
+        uiStore.setState({ canUndo: this.build.canUndo() });
+        levelStore.setState({ blocksUsed: g.blocks.length, height: buildHeight(g) });
+      }),
     );
+  }
+
+  private lastMode: Telemetry['mode'] = 'build';
+
+  /** On the frame a level run finishes, records its stars and unlocks the next level. */
+  private recordLevelResult(mode: Telemetry['mode'], stars: Telemetry['stars']) {
+    const finished = mode === 'survived' || mode === 'failed';
+    const justFinished = finished && this.lastMode === 'simulating';
+    this.lastMode = mode;
+    const levelId = uiStore.getState().levelId;
+    if (!justFinished || !levelId) return;
+    const out = recordResult(LEVELS, levelStore.getState().best, levelId, stars);
+    saveBest(out.best);
+    levelStore.setState({ best: out.best, justUnlocked: out.newlyUnlocked });
+    uiStore.setState({ unlocked: computeUnlocked(LEVELS, out.best) });
   }
 
   private tick(dt: number) {
@@ -87,6 +113,7 @@ export class Game implements GameActions, GameDebugApi {
       });
     }
     this.sampleStanding(t.mode, t.timeRemaining, t.standingRatio);
+    this.recordLevelResult(t.mode, t.stars);
   }
 
   /** Elapsed run seconds at the last `standingHistory` sample (null before the first sample of a run). */
@@ -122,6 +149,11 @@ export class Game implements GameActions, GameDebugApi {
     uiStore.setState({ tool: t });
   };
   setMaterial: GameActions['setMaterial'] = (m) => {
+    if (!isMaterialAllowed(this.build.getConstraints(), m)) {
+      levelStore.setState({ notice: 'This level does not have that material.' });
+      return;
+    }
+    levelStore.setState({ notice: null });
     this.build.setMaterial(m);
     uiStore.setState({ material: m });
   };
@@ -129,14 +161,41 @@ export class Game implements GameActions, GameDebugApi {
     this.build.setMirrorX(on);
     uiStore.setState({ mirrorX: on });
   };
-  setDisaster: GameActions['setDisaster'] = (d) => uiStore.setState({ disaster: d });
-  setStrength: GameActions['setStrength'] = (s) => uiStore.setState({ strength: s });
-  /** CONTRACT STUB: the level thread loads the level's build, constraints, disaster and strength. */
+  setDisaster: GameActions['setDisaster'] = (d) => {
+    if (this.lockedByLevel()) return;
+    uiStore.setState({ disaster: d });
+  };
+  setStrength: GameActions['setStrength'] = (s) => {
+    if (this.lockedByLevel()) return;
+    uiStore.setState({ strength: s });
+  };
+
+  /** Disaster and strength are fixed while a challenge level is active. */
+  private lockedByLevel(): boolean {
+    if (uiStore.getState().levelId === null) return false;
+    levelStore.setState({ notice: 'This level has its own disaster. Leave the level to pick another.' });
+    return true;
+  }
+
+  /** Starts a challenge level (fresh island, its limits, disaster and strength) or free build with null. */
   selectLevel: GameActions['selectLevel'] = (id) => {
     this.ensureBuildMode();
     const level = id ? getLevel(id) : undefined;
-    this.build.setConstraints(level?.constraints ?? null);
-    uiStore.setState({ levelId: level ? level.id : null });
+    if (level && !uiStore.getState().unlocked.includes(level.id)) return;
+    levelStore.setState({ notice: null, justUnlocked: null });
+    if (!level) {
+      this.build.setConstraints(null);
+      uiStore.setState({ levelId: null });
+      return;
+    }
+    this.build.setConstraints(null);
+    this.build.loadGraph(level.start?.() ?? emptyGraph());
+    this.build.setConstraints(level.constraints ?? null);
+    const allowed = level.constraints?.materials;
+    const { material } = uiStore.getState();
+    const first = allowed?.[0];
+    if (first && !allowed.includes(material)) this.setMaterial(first);
+    uiStore.setState({ levelId: level.id, disaster: level.disaster, strength: level.strength });
   };
   loadPreset: GameActions['loadPreset'] = (p: PresetName) => {
     this.ensureBuildMode();
@@ -152,9 +211,19 @@ export class Game implements GameActions, GameDebugApi {
   };
   toggleDisaster = () => {
     this.audio.resume();
-    const { mode, disaster, strength } = uiStore.getState();
-    if (mode === 'build') void this.startDisaster(disaster, 1, strength);
-    else this.rewind();
+    const { mode, disaster, strength, levelId } = uiStore.getState();
+    if (mode !== 'build') {
+      this.rewind();
+      return;
+    }
+    const level = levelId ? getLevel(levelId) : undefined;
+    if (level?.minHeight && buildHeight(this.build.getGraph()) < level.minHeight) {
+      levelStore.setState({ notice: `Build at least ${level.minHeight} blocks tall first!` });
+      return;
+    }
+    levelStore.setState({ notice: null });
+    if (level) void this.startDisaster(level.disaster, level.seed ?? 1, level.strength);
+    else void this.startDisaster(disaster, 1, strength);
   };
   setCameraAzimuth: GameActions['setCameraAzimuth'] = (deg) => {
     this.scene.setAzimuth(deg);

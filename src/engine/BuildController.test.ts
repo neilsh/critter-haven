@@ -190,3 +190,37 @@ describe('BuildController', () => {
     expect(grid.visible).toBe(false);
   });
 });
+
+describe('BuildController constraints', () => {
+  it('rejects blocks over the limit but keeps existing ones and allows undo', () => {
+    const { bc } = setup();
+    bc.setConstraints({ maxBlocks: 2 });
+    expect(bc.placeBlock([0, 0, 0], 'wood')).toBe(true);
+    expect(bc.placeBlock([1, 0, 0], 'wood')).toBe(true);
+    expect(bc.placeBlock([2, 0, 0], 'wood')).toBe(false);
+    expect(bc.getGraph().blocks).toHaveLength(2);
+    bc.undo();
+    expect(bc.placeBlock([2, 0, 0], 'wood')).toBe(true);
+  });
+
+  it('rejects disallowed materials for blocks and struts', () => {
+    const { bc } = setup();
+    bc.setConstraints({ materials: ['bamboo'] });
+    expect(bc.placeBlock([0, 0, 0], 'stone')).toBe(false);
+    expect(bc.placeBlock([0, 0, 0], 'bamboo')).toBe(true);
+    expect(bc.addStrut([0, 0, 0], [1, 1, 0], 'wood')).toBe(false);
+    expect(bc.addStrut([0, 0, 0], [1, 1, 0], 'bamboo')).toBe(true);
+  });
+
+  it('lifts every limit when cleared and never removes pieces that are already placed', () => {
+    const { bc } = setup();
+    bc.setConstraints({ maxBlocks: 1, materials: ['wood'] });
+    bc.placeBlock([0, 0, 0], 'wood');
+    bc.setConstraints(null);
+    expect(bc.getConstraints()).toBeNull();
+    expect(bc.placeBlock([1, 0, 0], 'stone')).toBe(true);
+    bc.setConstraints({ maxBlocks: 1 });
+    expect(bc.getGraph().blocks).toHaveLength(2);
+    expect(bc.placeBlock([2, 0, 0], 'wood')).toBe(false);
+  });
+});
