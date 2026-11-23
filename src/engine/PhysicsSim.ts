@@ -74,6 +74,8 @@ export interface PhysicsEvents {
   /** For sound: 0..1 strength of the current disaster, called every step. */
   onIntensity?(disaster: DisasterType, intensity: number): void;
   onWaterLevel?(y: number): void;
+  /** For visuals: a hail stone first hit something, at this world point (bottom of the stone). */
+  onHailImpact?(x: number, y: number, z: number): void;
 }
 
 // ------------------------------------------------------------------ tuning
@@ -338,6 +340,8 @@ interface Link {
 interface Hail {
   body: RigidBody;
   mesh: THREE.Mesh;
+  radius: number;
+  landed: boolean;
 }
 
 /** One disaster run: owns the Rapier world. Created only after Rapier is initialised. */
@@ -755,9 +759,15 @@ class SimRun {
       this.hailAccumulator -= 1;
       this.spawnHail();
     }
-    // Cull stones that fell off the island.
+    // Report each stone's first hit (its fall is suddenly slowed), and cull stones that fell off.
+    const ev = this.events();
     this.hail = this.hail.filter((s) => {
-      if (s.body.translation().y > -20) return true;
+      const p = s.body.translation();
+      if (!s.landed && s.body.linvel().y > -h.speed * 0.5) {
+        s.landed = true;
+        ev.onHailImpact?.(p.x, p.y - s.radius, p.z);
+      }
+      if (p.y > -20) return true;
       this.hailRoot?.remove(s.mesh);
       this.world.removeRigidBody(s.body);
       return false;
@@ -780,7 +790,7 @@ class SimRun {
     mesh.position.set(x, y, z);
     mesh.castShadow = true;
     this.hailRoot?.add(mesh);
-    this.hail.push({ body, mesh });
+    this.hail.push({ body, mesh, radius: r, landed: false });
   }
 
   // ---------------------------------------------------------------- stepping & strain
