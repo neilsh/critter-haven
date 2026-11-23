@@ -198,6 +198,11 @@ export class Game implements GameActions, GameDebugApi {
     uiStore.setState({ levelId: level.id, disaster: level.disaster, strength: level.strength });
   };
   loadPreset: GameActions['loadPreset'] = (p: PresetName) => {
+    // Presets would bypass the level's block and material limits, so they are free-build only.
+    if (uiStore.getState().levelId !== null) {
+      levelStore.setState({ notice: 'Starter builds are for free build. Leave the level to use them.' });
+      return;
+    }
     this.ensureBuildMode();
     this.build.loadPreset(p);
   };

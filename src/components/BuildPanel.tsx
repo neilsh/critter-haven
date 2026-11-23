@@ -11,6 +11,8 @@ import {
   Undo2,
   Waypoints,
 } from 'lucide-react';
+import { isMaterialAllowed } from '../levels/constraints';
+import { getLevel } from '../levels/levels';
 import { useUIState } from '../state/store';
 import {
   MATERIALS,
@@ -38,6 +40,8 @@ const PRESETS: Array<{ id: PresetName; label: string; icon: ReactNode }> = [
 /** Build tools, materials, mirror/undo/clear and starter presets. Reads the UI store only. */
 export function BuildPanel({ actions }: { actions: GameActions }) {
   const s = useUIState();
+  // A challenge level greys out materials it does not allow and the presets (they would skip its limits).
+  const level = s.levelId ? getLevel(s.levelId) : undefined;
   return (
     <section
       aria-label="Build tools"
@@ -84,6 +88,7 @@ export function BuildPanel({ actions }: { actions: GameActions }) {
             label={MATERIALS[m].label}
             icon={<Swatch color={MATERIALS[m].color} />}
             active={s.material === m}
+            disabled={!isMaterialAllowed(level?.constraints, m)}
             onClick={() => actions.setMaterial(m)}
           />
         ))}
@@ -96,6 +101,7 @@ export function BuildPanel({ actions }: { actions: GameActions }) {
             testId={`preset-${p.id}`}
             label={p.label}
             icon={p.icon}
+            disabled={level !== undefined}
             onClick={() => actions.loadPreset(p.id)}
           />
         ))}
