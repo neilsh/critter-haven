@@ -33,7 +33,15 @@
 import type * as RapierModule from '@dimforge/rapier3d-compat';
 import type { ImpulseJoint, ImpulseJointSet, JointAxis, RigidBody, World } from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
-import type { BlueprintGraph, BlockData, DisasterType, StrutData, Telemetry, Vec3 } from '../types/blueprint';
+import type {
+  BlueprintGraph,
+  BlockData,
+  DisasterType,
+  Strength,
+  StrutData,
+  Telemetry,
+  Vec3,
+} from '../types/blueprint';
 import {
   CELL_SIZE,
   DEFAULT_STRENGTH,
@@ -45,7 +53,6 @@ import {
   cornerToWorld,
   key,
 } from '../types/blueprint';
-import type { Strength } from '../types/blueprint';
 import type { MeshRegistry } from './BuildController';
 
 type PhysicsTelemetry = Pick<
