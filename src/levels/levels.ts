@@ -77,7 +77,7 @@ export const LEVELS: readonly Level[] = [
     disaster: 'hurricane',
     strength: 'medium',
     constraints: { maxBlocks: 16, materials: ['bamboo', 'foam'] },
-    goalStars: 1,
+    goalStars: 2,
   },
   {
     id: 'wobbly-tower',
@@ -88,7 +88,7 @@ export const LEVELS: readonly Level[] = [
     constraints: { maxBlocks: 12 },
     minHeight: 4,
     start: PRESETS.tower,
-    goalStars: 3,
+    goalStars: 2,
   },
   {
     id: 'duck-pond',
@@ -116,8 +116,8 @@ export const LEVELS: readonly Level[] = [
     disaster: 'hurricane',
     strength: 'strong',
     constraints: { maxBlocks: 20 },
-    minHeight: 3,
-    goalStars: 1,
+    minHeight: 4,
+    goalStars: 2,
   },
 ];
 
