@@ -83,7 +83,7 @@ test.describe('towers and houses', () => {
     await page.evaluate(() => window.__GAME_DEBUG__!.startDisaster('earthquake', 1));
     await waitForMode(page, 'failed');
     expect((await telemetry(page)).firstBrokenId).not.toBeNull();
-    await expect(page.getByTestId('lose-banner')).toBeAttached();
+    await expect(page.getByTestId('lose-banner')).toBeVisible();
     await expect(page.getByTestId('result-banner')).toBeVisible();
     await expect(page.getByTestId('star-row')).toBeVisible();
     // The countdown stays at 0 after the run instead of jumping back to 8.
@@ -106,7 +106,7 @@ test.describe('towers and houses', () => {
     await page.evaluate(() => window.__GAME_DEBUG__!.startDisaster('earthquake', 1));
     await waitForMode(page, 'survived');
     expect((await telemetry(page)).firstBrokenId).toBeNull();
-    await expect(page.getByTestId('win-banner')).toBeAttached();
+    await expect(page.getByTestId('win-banner')).toBeVisible();
     await expect(page.getByTestId('star-row')).toBeVisible();
     await expect(page.getByTestId('countdown')).toHaveText('0');
     await page.screenshot({ path: 'test-results/house-survived.png' });

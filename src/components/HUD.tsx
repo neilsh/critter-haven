@@ -3,7 +3,7 @@
  * `actions` for everything. Every interactive control needs a `data-testid`:
  * tool-block|brace|paint|erase, mirror-x, undo, clear-island, material-wood|stone|bamboo|foam,
  * disaster-earthquake|hurricane|flood|hail, preset-empty|house|tower, test-disaster (also Rewind),
- * countdown, strength-gentle|medium|strong, result-banner (plus win-banner/lose-banner marker), star-row, standing-sparkline, cam-front|right|back|left, mute-toggle.
+ * countdown, strength-gentle|medium|strong, result-banner (title is win-banner/lose-banner), standing-percent, star-row, standing-sparkline, cam-front|right|back|left, mute-toggle.
  * Must not import three, Rapier or anything under src/engine.
  *
  * The HUD root ignores pointer events so the 3D view stays draggable everywhere except on the cards.
@@ -30,12 +30,10 @@ export function HUD({ actions }: { actions: GameActions }) {
         <CameraPanel actions={actions} />
       </div>
 
-      <div className="absolute inset-x-2 bottom-2 flex justify-center">
-        <DisasterPanel actions={actions} />
-      </div>
-
-      <div className="absolute inset-x-0 top-1/3 flex justify-center px-4">
+      {/* The result banner stacks just above the disaster bar so it never hides the building. */}
+      <div className="absolute inset-x-2 bottom-2 flex flex-col items-center gap-2">
         <Banners />
+        <DisasterPanel actions={actions} />
       </div>
     </div>
   );
