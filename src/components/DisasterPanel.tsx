@@ -1,9 +1,17 @@
 import { Activity, CloudHail, Play, RotateCcw, Waves, Wind } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useUIState } from '../state/store';
-import { DISASTER_ORDER, DISASTER_SECONDS, type DisasterType } from '../types/blueprint';
+import {
+  DISASTER_ORDER,
+  DISASTER_SECONDS,
+  STRENGTH_ORDER,
+  type DisasterType,
+  type Strength,
+} from '../types/blueprint';
 import type { GameActions } from '../types/ui';
 import { Chip } from './Chip';
+
+const STRENGTHS: Record<Strength, string> = { gentle: 'Gentle', medium: 'Medium', strong: 'Strong' };
 
 const DISASTERS: Record<DisasterType, { label: string; icon: ReactNode }> = {
   earthquake: { label: 'Quake', icon: <Activity size={22} /> },
@@ -16,7 +24,12 @@ const DISASTERS: Record<DisasterType, { label: string; icon: ReactNode }> = {
 export function DisasterPanel({ actions }: { actions: GameActions }) {
   const s = useUIState();
   const building = s.mode === 'build';
-  const seconds = s.mode === 'simulating' ? Math.max(0, Math.ceil(s.timeRemaining)) : DISASTER_SECONDS;
+  // Idle shows the full countdown; a finished run shows 0 instead of jumping back to 8.
+  const seconds = building
+    ? DISASTER_SECONDS
+    : s.mode === 'simulating'
+      ? Math.max(0, Math.ceil(s.timeRemaining))
+      : 0;
 
   return (
     <section
@@ -33,6 +46,19 @@ export function DisasterPanel({ actions }: { actions: GameActions }) {
             active={s.disaster === d}
             disabled={!building}
             onClick={() => actions.setDisaster(d)}
+          />
+        ))}
+      </div>
+
+      <div className="flex gap-2" role="group" aria-label="Pick a strength">
+        {STRENGTH_ORDER.map((st) => (
+          <Chip
+            key={st}
+            testId={`strength-${st}`}
+            label={STRENGTHS[st]}
+            active={s.strength === st}
+            disabled={!building}
+            onClick={() => actions.setStrength(st)}
           />
         ))}
       </div>

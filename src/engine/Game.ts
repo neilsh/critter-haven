@@ -14,11 +14,14 @@ import type {
   GameDebugApi,
   MaterialType,
   PresetName,
+  Strength,
   Telemetry,
   Vec3,
 } from '../types/blueprint';
 import type { GameActions } from '../types/ui';
+import { DEFAULT_STRENGTH, DISASTER_SECONDS } from '../types/blueprint';
 import { uiStore } from '../state/store';
+import { getLevel } from '../levels/levels';
 import { BuildController } from './BuildController';
 import { PhysicsSim } from './PhysicsSim';
 import { AudioSynth, ProceduralAssets } from './ProceduralAssets';
@@ -51,6 +54,7 @@ export class Game implements GameActions, GameDebugApi {
       },
       onSurvived: () => this.audio.playVictory(),
       onIntensity: (disaster, intensity) => {
+        this.scene.setDisasterFx(disaster, intensity);
         if (disaster === 'hurricane') this.audio.playWind(intensity);
         else if (disaster === 'earthquake') this.audio.playRumble(intensity);
       },
@@ -67,8 +71,43 @@ export class Game implements GameActions, GameDebugApi {
     if (this.physics.isRunning()) this.physics.update(dt);
     const t = this.physics.getTelemetry();
     const s = uiStore.getState();
-    if (s.mode !== t.mode || s.timeRemaining !== t.timeRemaining || s.firstBrokenId !== t.firstBrokenId) {
-      uiStore.setState({ mode: t.mode, timeRemaining: t.timeRemaining, firstBrokenId: t.firstBrokenId });
+    if (
+      s.mode !== t.mode ||
+      s.timeRemaining !== t.timeRemaining ||
+      s.firstBrokenId !== t.firstBrokenId ||
+      s.standingRatio !== t.standingRatio ||
+      s.stars !== t.stars
+    ) {
+      uiStore.setState({
+        mode: t.mode,
+        timeRemaining: t.timeRemaining,
+        firstBrokenId: t.firstBrokenId,
+        standingRatio: t.standingRatio,
+        stars: t.stars,
+      });
+    }
+    this.sampleStanding(t.mode, t.timeRemaining, t.standingRatio);
+  }
+
+  /** Elapsed run seconds at the last `standingHistory` sample (null before the first sample of a run). */
+  private lastSampleElapsed: number | null = null;
+  private static readonly SAMPLE_EVERY = 0.25;
+
+  /** Appends standingRatio to `standingHistory` every 0.25 s of a run, plus once when it ends. */
+  private sampleStanding(mode: Telemetry['mode'], timeRemaining: number, standingRatio: number) {
+    const history = uiStore.getState().standingHistory;
+    if (mode === 'build') {
+      if (history.length > 0) uiStore.setState({ standingHistory: [] });
+      this.lastSampleElapsed = null;
+      return;
+    }
+    const elapsed = DISASTER_SECONDS - timeRemaining;
+    const due =
+      this.lastSampleElapsed === null || elapsed - this.lastSampleElapsed >= Game.SAMPLE_EVERY - 1e-9;
+    const finalSample = mode !== 'simulating' && this.lastSampleElapsed !== elapsed;
+    if (due || finalSample) {
+      this.lastSampleElapsed = elapsed;
+      uiStore.setState({ standingHistory: [...history, standingRatio] });
     }
   }
 
@@ -91,6 +130,14 @@ export class Game implements GameActions, GameDebugApi {
     uiStore.setState({ mirrorX: on });
   };
   setDisaster: GameActions['setDisaster'] = (d) => uiStore.setState({ disaster: d });
+  setStrength: GameActions['setStrength'] = (s) => uiStore.setState({ strength: s });
+  /** CONTRACT STUB: the level thread loads the level's build, constraints, disaster and strength. */
+  selectLevel: GameActions['selectLevel'] = (id) => {
+    this.ensureBuildMode();
+    const level = id ? getLevel(id) : undefined;
+    this.build.setConstraints(level?.constraints ?? null);
+    uiStore.setState({ levelId: level ? level.id : null });
+  };
   loadPreset: GameActions['loadPreset'] = (p: PresetName) => {
     this.ensureBuildMode();
     this.build.loadPreset(p);
@@ -105,7 +152,8 @@ export class Game implements GameActions, GameDebugApi {
   };
   toggleDisaster = () => {
     this.audio.resume();
-    if (uiStore.getState().mode === 'build') void this.startDisaster(uiStore.getState().disaster);
+    const { mode, disaster, strength } = uiStore.getState();
+    if (mode === 'build') void this.startDisaster(disaster, 1, strength);
     else this.rewind();
   };
   setCameraAzimuth: GameActions['setCameraAzimuth'] = (deg) => {
@@ -119,12 +167,12 @@ export class Game implements GameActions, GameDebugApi {
 
   // ------------------------------------------------------------ disaster lifecycle (also debug API)
 
-  async startDisaster(type: DisasterType, seed = 1): Promise<void> {
+  async startDisaster(type: DisasterType, seed = 1, strength: Strength = DEFAULT_STRENGTH): Promise<void> {
     this.ensureBuildMode();
     const token = ++this.runToken;
-    uiStore.setState({ disaster: type });
+    uiStore.setState({ disaster: type, strength });
     this.build.setEnabled(false);
-    await this.physics.start(this.build.getGraph(), this.build.meshes, type, seed);
+    await this.physics.start(this.build.getGraph(), this.build.meshes, type, seed, strength);
     if (token !== this.runToken) this.physics.stop(); // rewound while Rapier was loading
   }
 
@@ -137,6 +185,7 @@ export class Game implements GameActions, GameDebugApi {
     this.scene.setWaterLevel(WATER_HIDDEN);
     this.audio.playWind(0);
     this.audio.playRumble(0);
+    this.scene.setDisasterFx(uiStore.getState().disaster, 0);
     this.tick(0);
   }
 
@@ -155,7 +204,12 @@ export class Game implements GameActions, GameDebugApi {
   }
   getTelemetry(): Telemetry {
     const g = this.build.getGraph();
-    return { ...this.physics.getTelemetry(), blockCount: g.blocks.length, strutCount: g.struts.length };
+    return {
+      ...this.physics.getTelemetry(),
+      strength: uiStore.getState().strength,
+      blockCount: g.blocks.length,
+      strutCount: g.struts.length,
+    };
   }
 
   dispose() {

@@ -245,9 +245,30 @@ export const PRESETS: Record<PresetName, () => BlueprintGraph> = {
  */
 export type GameMode = 'build' | 'simulating' | 'survived' | 'failed';
 
+/** Build limits imposed by a challenge level. Omitted fields mean "no limit". */
+export interface BuildConstraints {
+  maxBlocks?: number;
+  /** Materials the player may use; omitted means all. */
+  materials?: readonly MaterialType[];
+}
+
+/** How hard a disaster hits. Medium is the calibrated baseline (tower fails, starter house survives). */
+export type Strength = 'gentle' | 'medium' | 'strong';
+export const STRENGTH_ORDER: readonly Strength[] = ['gentle', 'medium', 'strong'];
+export const DEFAULT_STRENGTH: Strength = 'medium';
+
+/** 0 = everything collapsed, 3 = not a single joint broke. */
+export type Stars = 0 | 1 | 2 | 3;
+
 export interface Telemetry {
   mode: GameMode;
   timeRemaining: number;
+  /** Strength of the current (or next) disaster. */
+  strength: Strength;
+  /** Fraction (0..1) of joints still intact; 1 while building. Basis of the star rating. */
+  standingRatio: number;
+  /** Star rating of the run so far; only final once mode is survived or failed. 0 while building. */
+  stars: Stars;
   blockCount: number;
   strutCount: number;
   activeJoints: number;
@@ -265,7 +286,7 @@ export interface GameDebugApi {
   getGraph(): BlueprintGraph;
   setCameraAzimuth(degrees: Azimuth): void;
   /** Resolves once Rapier is initialised and the first step can run. */
-  startDisaster(type: DisasterType, seed?: number): Promise<void>;
+  startDisaster(type: DisasterType, seed?: number, strength?: Strength): Promise<void>;
   rewind(): void;
   getTelemetry(): Telemetry;
 }
