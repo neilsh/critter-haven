@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { Azimuth, DisasterType, Vec3 } from '../types/blueprint';
 import { ISLAND_SIZE } from '../types/blueprint';
+import { DisasterEffects } from './Effects';
 
 // Low enough that the bottom HUD bar does not cover the island's front edge.
 const TARGET = new THREE.Vector3(0, 1.5, 0);
@@ -96,6 +97,7 @@ export class SceneManager {
   private readonly clouds: THREE.Mesh[] = [];
   private readonly water: THREE.Mesh;
   private readonly waterBase: Float32Array;
+  private readonly effects: DisasterEffects;
   private readonly timer = new THREE.Timer();
   private rafId = 0;
   private time = 0;
@@ -119,8 +121,10 @@ export class SceneManager {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
 
-    this.scene.background = new THREE.Color('#9bdcff');
-    this.scene.fog = new THREE.Fog('#c9ecff', 70, 150);
+    const background = new THREE.Color('#9bdcff');
+    const fog = new THREE.Fog('#c9ecff', 70, 150);
+    this.scene.background = background;
+    this.scene.fog = fog;
     this.scene.add(this.buildRoot, this.islandTop);
 
     this.buildLights();
@@ -128,6 +132,7 @@ export class SceneManager {
     this.buildClouds();
     this.water = this.buildWater();
     this.waterBase = Float32Array.from(this.water.geometry.attributes.position.array);
+    this.effects = new DisasterEffects(this.scene, { background, fog });
 
     this.camera.position
       .set(0, 0, DEFAULT_RADIUS)
@@ -178,14 +183,18 @@ export class SceneManager {
     this.controls.enabled = enabled;
   }
 
-  /** Level of the animated flood plane (world y). Hidden when below -1. */
   /**
-   * Per-frame disaster visuals (dust, wind streaks, rain, sky tint). `intensity` is 0..1 and 0 means
-   * off. CONTRACT STUB: no visuals yet.
+   * Per-frame disaster visuals: quake shake and dust, wind streaks and leaves, flood splashes, hail
+   * puffs and a gentle sky tint. `intensity` is 0..1 and 0 means off. Call it every physics step;
+   * the effects switch themselves off shortly after the calls stop.
    */
-  setDisasterFx(_disaster: DisasterType, _intensity: number): void {}
+  setDisasterFx(disaster: DisasterType, intensity: number): void {
+    this.effects.setDisaster(disaster, intensity);
+  }
 
+  /** Level of the animated flood plane (world y). Hidden when below -1. */
   setWaterLevel(y: number): void {
+    this.effects.setWaterLevel(y);
     this.water.visible = y >= WATER_HIDDEN_BELOW;
     this.water.position.y = y;
   }
@@ -204,6 +213,7 @@ export class SceneManager {
     this.controls.removeEventListener('start', this.cancelTween);
     this.controls.dispose();
     this.timer.dispose();
+    this.effects.dispose();
 
     const textures = new Set<THREE.Texture>();
     this.scene.traverse((obj) => {
@@ -240,9 +250,14 @@ export class SceneManager {
     this.stepTween(dt);
     this.controls.update();
     this.animateScenery(dt);
+    this.effects.update(dt);
 
     for (const cb of this.callbacks) cb(dt);
+    // Shake is a render-only offset so OrbitControls never sees it.
+    const shake = this.effects.shakeOffset;
+    this.camera.position.add(shake);
     this.renderer.render(this.scene, this.camera);
+    this.camera.position.sub(shake);
   };
 
   private stepTween(dt: number): void {
