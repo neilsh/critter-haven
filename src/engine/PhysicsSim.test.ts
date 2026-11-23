@@ -236,6 +236,22 @@ describe('other disasters', () => {
     sim.stop();
     expect(root.children.length).toBe(before);
   });
+
+  it('hail: reports where stones land, on the ground or the roof', async () => {
+    const g = PRESETS.house();
+    const sim = new PhysicsSim();
+    const hits: Array<[number, number, number]> = [];
+    sim.setEvents({ onHailImpact: (x, y, z) => hits.push([x, y, z]) });
+    await sim.start(g, meshesFor(g), 'hail', 1);
+    while (sim.isRunning()) sim.update(1 / 60);
+    expect(hits.length).toBeGreaterThan(10);
+    for (const [x, y, z] of hits) {
+      expect(Number.isFinite(x) && Number.isFinite(z)).toBe(true);
+      // Never in mid-air near the spawn height, never far below the island top.
+      expect(y).toBeGreaterThan(-1);
+      expect(y).toBeLessThan(10);
+    }
+  });
 });
 
 describe('stress X-ray and meshes', () => {
