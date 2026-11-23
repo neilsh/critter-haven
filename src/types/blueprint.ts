@@ -288,7 +288,11 @@ export function emptyGraph(): BlueprintGraph {
   return { version: 1, blocks: [], struts: [] };
 }
 
-export const cloneGraph = (g: BlueprintGraph): BlueprintGraph => JSON.parse(JSON.stringify(g));
+export const cloneGraph = (g: BlueprintGraph): BlueprintGraph => ({
+  version: g.version,
+  blocks: g.blocks.map((b) => ({ id: b.id, cell: [...b.cell], material: b.material })),
+  struts: g.struts.map((s) => ({ id: s.id, a: [...s.a], b: [...s.b], material: s.material })),
+});
 
 // ---------------------------------------------------------------- presets
 

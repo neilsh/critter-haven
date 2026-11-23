@@ -253,8 +253,21 @@ function tint(piece: PieceHandle, strain: number) {
   piece.emissiveIntensity = 0.25 + 0.6 * clamp01(strain);
 }
 
-const v3 = (p: { x: number; y: number; z: number }) => new THREE.Vector3(p.x, p.y, p.z);
-const q4 = (q: { x: number; y: number; z: number; w: number }) => new THREE.Quaternion(q.x, q.y, q.z, q.w);
+const tmpP1 = new THREE.Vector3();
+const tmpP2 = new THREE.Vector3();
+const tmpQ1 = new THREE.Quaternion();
+const tmpQ2 = new THREE.Quaternion();
+const tmpWpQ = new THREE.Quaternion();
+const tmpV1 = new THREE.Vector3();
+const tmpV2 = new THREE.Vector3();
+const tmpMid0 = new THREE.Vector3();
+const tmpMid1 = new THREE.Vector3();
+const tmpD0 = new THREE.Vector3();
+const tmpD1 = new THREE.Vector3();
+const tmpRot = new THREE.Quaternion();
+const tmpPos = new THREE.Vector3();
+const tmpQuat = new THREE.Quaternion();
+const UP_UNIT = new THREE.Vector3(0, 1, 0);
 
 type RawJointSet = ImpulseJointSet['raw'];
 type RawAxis = Parameters<RawJointSet['jointConfigureMotorPosition']>[1];
@@ -705,7 +718,7 @@ class SimRun {
           break;
         }
       }
-      if (destroyedProj) this.projectiles = this.projectiles.filter((p) => !p.destroyed);
+      if (destroyedProj) this.compactProjectiles();
 
       if (!impact) {
         const half = CELL_SIZE / 2;
@@ -930,7 +943,10 @@ class SimRun {
     const w = new THREE.Vector3(...cornerToWorld(k));
     const owner = blocksAtCorner(graph, k)[0];
     const rec = owner ? byCell.get(key(owner.cell)) : undefined;
-    if (rec) return { body: rec.body, local: w.sub(v3(rec.body.translation())), rec };
+    if (rec) {
+      const t = rec.body.translation();
+      return { body: rec.body, local: w.sub(tmpV1.set(t.x, t.y, t.z)), rec };
+    }
     if (k[1] === 0) return { body: this.ground, local: w, rec: null };
     return null;
   }
@@ -1284,11 +1300,22 @@ class SimRun {
     });
   }
 
+  private compactProjectiles() {
+    let write = 0;
+    for (let i = 0; i < this.projectiles.length; i++) {
+      const p = this.projectiles[i];
+      if (p && !p.destroyed) this.projectiles[write++] = p;
+    }
+    this.projectiles.length = write;
+  }
+
   private updateProjectiles() {
     // Report each projectile's first hit (its flight is suddenly slowed), and cull ones that fell off.
     const ev = this.events();
-    this.projectiles = this.projectiles.filter((s) => {
-      if (s.destroyed) return false;
+    let write = 0;
+    for (let i = 0; i < this.projectiles.length; i++) {
+      const s = this.projectiles[i];
+      if (!s || s.destroyed) continue;
       const p = s.body.translation();
       const v = s.body.linvel();
       const hit =
@@ -1300,11 +1327,14 @@ class SimRun {
         ev.onProjectileImpact?.(s.kind, p.x, p.y - s.radius, p.z);
         if (s.kind === 'hail') ev.onHailImpact?.(p.x, p.y - s.radius, p.z);
       }
-      if (p.y > -20) return true;
-      this.effectsRoot?.remove(s.mesh);
-      this.world.removeRigidBody(s.body);
-      return false;
-    });
+      if (p.y > -20) {
+        this.projectiles[write++] = s;
+      } else {
+        this.effectsRoot?.remove(s.mesh);
+        this.world.removeRigidBody(s.body);
+      }
+    }
+    this.projectiles.length = write;
   }
 
   private updateLasers() {
@@ -1345,7 +1375,7 @@ class SimRun {
         ev.onLaserFire?.([lp.x, lp.y, lp.z], [bestPos.x, bestPos.y, bestPos.z]);
       }
     }
-    if (destroyedAny) this.projectiles = this.projectiles.filter((p) => !p.destroyed);
+    if (destroyedAny) this.compactProjectiles();
   }
 
   // ---------------------------------------------------------------- stepping & strain
@@ -1369,23 +1399,37 @@ class SimRun {
     }
   }
 
-  private static worldPoint(body: RigidBody, local: THREE.Vector3) {
-    return local.clone().applyQuaternion(q4(body.rotation())).add(v3(body.translation()));
+  private static worldPoint(body: RigidBody, local: THREE.Vector3, out: THREE.Vector3): THREE.Vector3 {
+    const r = body.rotation();
+    const t = body.translation();
+    tmpWpQ.set(r.x, r.y, r.z, r.w);
+    out.copy(local).applyQuaternion(tmpWpQ);
+    out.x += t.x;
+    out.y += t.y;
+    out.z += t.z;
+    return out;
   }
 
   private static linkStretch(l: Link): number {
-    const p1 = SimRun.worldPoint(l.body1, l.local1);
-    const p2 = SimRun.worldPoint(l.body2, l.local2);
+    const p1 = SimRun.worldPoint(l.body1, l.local1, tmpP1);
+    const p2 = SimRun.worldPoint(l.body2, l.local2, tmpP2);
     if (l.kind === 'strut') return Math.abs(p1.distanceTo(p2) - l.rest);
     // Every body starts unrotated, so the rest relative rotation is the identity.
-    const rel = q4(l.body1.rotation()).invert().multiply(q4(l.body2.rotation()));
-    const angle = 2 * Math.acos(Math.min(1, Math.abs(rel.w)));
+    const r1 = l.body1.rotation();
+    const r2 = l.body2.rotation();
+    tmpQ1.set(r1.x, r1.y, r1.z, r1.w).invert();
+    tmpQ2.set(r2.x, r2.y, r2.z, r2.w);
+    tmpQ1.multiply(tmpQ2);
+    const angle = 2 * Math.acos(Math.min(1, Math.abs(tmpQ1.w)));
     return p1.distanceTo(p2) + angle * (CELL_SIZE / 2);
   }
 
-  private isProtectedByShield(l: Link, activeShields: BlockRec[], r2: number): boolean {
-    for (const s of activeShields) {
-      const sp = s.body.translation();
+  private isProtectedByShield(
+    l: Link,
+    shieldPositions: ReadonlyArray<{ x: number; y: number; z: number }>,
+    r2: number,
+  ): boolean {
+    for (const sp of shieldPositions) {
       for (const b of l.blocks) {
         const bp = b.body.translation();
         const d2 = (sp.x - bp.x) ** 2 + (sp.y - bp.y) ** 2 + (sp.z - bp.z) ** 2;
@@ -1398,12 +1442,15 @@ class SimRun {
   private measureAndBreak() {
     for (const b of this.blocks) b.strain = 0;
     for (const s of this.struts) s.strain = 0;
-    const activeShields = this.shieldBlocks.filter((s) => !s.fallen);
+    const activeShieldPos: Array<{ x: number; y: number; z: number }> = [];
+    for (const s of this.shieldBlocks) {
+      if (!s.fallen) activeShieldPos.push(s.body.translation());
+    }
     const r2 = T.shield.radius * T.shield.radius;
     for (const l of this.links) {
       if (l.broken) continue;
       const limit =
-        activeShields.length > 0 && this.isProtectedByShield(l, activeShields, r2)
+        activeShieldPos.length > 0 && this.isProtectedByShield(l, activeShieldPos, r2)
           ? l.limit * T.shield.stressMultiplier
           : l.limit;
       l.strain = SimRun.linkStretch(l) / limit;
@@ -1434,12 +1481,12 @@ class SimRun {
 
   /** A broken strut becomes a free-falling stick. */
   private makeDebris(s: StrutRec) {
-    const [a, b] = this.strutEnds(s);
-    const meshPose = SimRun.strutMeshPose(s, a, b);
-    const mid = a.clone().add(b).multiplyScalar(0.5);
-    const dir = b.clone().sub(a);
+    this.strutEndsInto(s, tmpV1, tmpV2);
+    SimRun.strutMeshPoseInto(s, tmpV1, tmpV2, tmpPos, tmpQuat);
+    const mid = tmpV1.clone().add(tmpV2).multiplyScalar(0.5);
+    const dir = tmpV2.clone().sub(tmpV1);
     const len = Math.max(0.4, dir.length());
-    const rot = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+    const rot = new THREE.Quaternion().setFromUnitVectors(UP_UNIT, dir.normalize());
     const body = this.world.createRigidBody(
       this.R.RigidBodyDesc.dynamic()
         .setTranslation(mid.x, mid.y, mid.z)
@@ -1454,25 +1501,32 @@ class SimRun {
     s.debris = body;
     // From now on the mesh pose is stored relative to the debris body.
     const inv = rot.clone().invert();
-    s.meshPos = meshPose.pos.sub(mid).applyQuaternion(inv);
-    s.meshQuat = inv.multiply(meshPose.quat);
+    s.meshPos = tmpPos.clone().sub(mid).applyQuaternion(inv);
+    s.meshQuat = inv.multiply(tmpQuat);
   }
 
-  private strutEnds(s: StrutRec): [THREE.Vector3, THREE.Vector3] {
-    const end = (e: StrutEnd | null, fallback: THREE.Vector3) =>
-      e ? SimRun.worldPoint(e.body, e.local) : fallback.clone();
-    return [end(s.endA, s.initA), end(s.endB, s.initB)];
+  private strutEndsInto(s: StrutRec, outA: THREE.Vector3, outB: THREE.Vector3): void {
+    if (s.endA) SimRun.worldPoint(s.endA.body, s.endA.local, outA);
+    else outA.copy(s.initA);
+    if (s.endB) SimRun.worldPoint(s.endB.body, s.endB.local, outB);
+    else outB.copy(s.initB);
   }
 
   /** Mesh pose that maps the blueprint segment initA-initB onto the current segment a-b. */
-  private static strutMeshPose(s: StrutRec, a: THREE.Vector3, b: THREE.Vector3) {
-    const d0 = s.initB.clone().sub(s.initA).normalize();
-    const d1 = b.clone().sub(a).normalize();
-    const rot = new THREE.Quaternion().setFromUnitVectors(d0, d1);
-    const mid0 = s.initA.clone().add(s.initB).multiplyScalar(0.5);
-    const mid1 = a.clone().add(b).multiplyScalar(0.5);
-    const pos = s.meshPos.clone().sub(mid0).applyQuaternion(rot).add(mid1);
-    return { pos, quat: rot.multiply(s.meshQuat) };
+  private static strutMeshPoseInto(
+    s: StrutRec,
+    a: THREE.Vector3,
+    b: THREE.Vector3,
+    outPos: THREE.Vector3,
+    outQuat: THREE.Quaternion,
+  ): void {
+    tmpD0.subVectors(s.initB, s.initA).normalize();
+    tmpD1.subVectors(b, a).normalize();
+    tmpRot.setFromUnitVectors(tmpD0, tmpD1);
+    tmpMid0.addVectors(s.initA, s.initB).multiplyScalar(0.5);
+    tmpMid1.addVectors(a, b).multiplyScalar(0.5);
+    outPos.subVectors(s.meshPos, tmpMid0).applyQuaternion(tmpRot).add(tmpMid1);
+    outQuat.multiplyQuaternions(tmpRot, s.meshQuat);
   }
 
   // ---------------------------------------------------------------- scoring
@@ -1510,32 +1564,43 @@ class SimRun {
   private syncMeshes() {
     for (const b of this.blocks) {
       if (!b.mesh) continue;
-      const q = q4(b.body.rotation());
-      b.mesh.position.copy(b.meshOffsetPos).applyQuaternion(q).add(v3(b.body.translation()));
-      b.mesh.quaternion.copy(q).multiply(b.meshOffsetQuat);
+      const r = b.body.rotation();
+      const t = b.body.translation();
+      tmpQ1.set(r.x, r.y, r.z, r.w);
+      b.mesh.position.copy(b.meshOffsetPos).applyQuaternion(tmpQ1);
+      b.mesh.position.x += t.x;
+      b.mesh.position.y += t.y;
+      b.mesh.position.z += t.z;
+      b.mesh.quaternion.multiplyQuaternions(tmpQ1, b.meshOffsetQuat);
       tint(b.mesh, b.strain);
     }
     for (const s of this.struts) {
       if (!s.mesh) continue;
       if (s.debris) {
-        const q = q4(s.debris.rotation());
-        s.mesh.position.copy(s.meshPos).applyQuaternion(q).add(v3(s.debris.translation()));
-        s.mesh.quaternion.copy(q).multiply(s.meshQuat);
+        const r = s.debris.rotation();
+        const t = s.debris.translation();
+        tmpQ1.set(r.x, r.y, r.z, r.w);
+        s.mesh.position.copy(s.meshPos).applyQuaternion(tmpQ1);
+        s.mesh.position.x += t.x;
+        s.mesh.position.y += t.y;
+        s.mesh.position.z += t.z;
+        s.mesh.quaternion.multiplyQuaternions(tmpQ1, s.meshQuat);
       } else {
-        const [a, b] = this.strutEnds(s);
-        const pose = SimRun.strutMeshPose(s, a, b);
-        s.mesh.position.copy(pose.pos);
-        s.mesh.quaternion.copy(pose.quat);
+        this.strutEndsInto(s, tmpV1, tmpV2);
+        SimRun.strutMeshPoseInto(s, tmpV1, tmpV2, s.mesh.position, s.mesh.quaternion);
       }
       tint(s.mesh, s.strain);
     }
     for (const p of this.projectiles) {
-      p.mesh.position.copy(v3(p.body.translation()));
-      p.mesh.quaternion.copy(q4(p.body.rotation()));
+      const t = p.body.translation();
+      const r = p.body.rotation();
+      p.mesh.position.set(t.x, t.y, t.z);
+      p.mesh.quaternion.set(r.x, r.y, r.z, r.w);
     }
     for (const d of this.shieldDomes) {
       d.mesh.visible = !d.rec.fallen;
-      d.mesh.position.copy(v3(d.rec.body.translation()));
+      const t = d.rec.body.translation();
+      d.mesh.position.set(t.x, t.y, t.z);
     }
   }
 }

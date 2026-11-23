@@ -190,16 +190,17 @@ export class Game implements GameActions, GameDebugApi {
     }
     const t = this.physics.getTelemetry();
     const s = uiStore.getState();
+    const uiTimeRemaining = t.mode === 'simulating' ? Math.ceil(t.timeRemaining) : t.timeRemaining;
     if (
       s.mode !== t.mode ||
-      s.timeRemaining !== t.timeRemaining ||
+      s.timeRemaining !== uiTimeRemaining ||
       s.firstBrokenId !== t.firstBrokenId ||
       s.standingRatio !== t.standingRatio ||
       s.stars !== t.stars
     ) {
       uiStore.setState({
         mode: t.mode,
-        timeRemaining: t.timeRemaining,
+        timeRemaining: uiTimeRemaining,
         firstBrokenId: t.firstBrokenId,
         standingRatio: t.standingRatio,
         stars: t.stars,

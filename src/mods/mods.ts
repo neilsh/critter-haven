@@ -188,7 +188,7 @@ export function slugifyId(prefix: string, name: string): string {
 }
 
 export function cloneMod(m: GameMod): GameMod {
-  return JSON.parse(JSON.stringify(m));
+  return structuredClone(m);
 }
 
 export function modBlockToMaterialDef(b: ModBlockDef): MaterialDef {

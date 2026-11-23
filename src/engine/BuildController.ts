@@ -7,10 +7,12 @@
  */
 import * as THREE from 'three';
 import type {
+  BlockData,
   BlueprintGraph,
   BuildConstraints,
   MaterialType,
   PresetName,
+  StrutData,
   ToolType,
   Vec3,
 } from '../types/blueprint';
@@ -84,6 +86,10 @@ export class BuildController {
 
   /** Candidate brace endpoints (ground lattice + block corners), a spatial hash keyed by `key()`. */
   private corners = new Map<string, Vec3>();
+  private blocksByCell = new Map<string, BlockData>();
+  private blocksById = new Map<string, BlockData>();
+  private strutsById = new Map<string, StrutData>();
+  private readonly tmpVec = new THREE.Vector3();
 
   // pointer / preview state
   private readonly raycaster = new THREE.Raycaster();
@@ -164,6 +170,7 @@ export class BuildController {
     };
     scene.onBeforeRender = this.beforeRender;
 
+    this.rebuildIndices();
     this.rebuildCorners();
     this.unsubFrame = sceneMgr.onFrame((dt) => this.onFrame(dt));
 
@@ -360,10 +367,24 @@ export class BuildController {
   }
 
   private afterGraphChange(): void {
+    this.rebuildIndices();
     this.syncMeshes();
     this.rebuildCorners();
     this.updatePreview();
     this.notify();
+  }
+
+  private rebuildIndices(): void {
+    this.blocksByCell.clear();
+    this.blocksById.clear();
+    this.strutsById.clear();
+    for (const b of this.graph.blocks) {
+      this.blocksByCell.set(key(b.cell), b);
+      this.blocksById.set(b.id, b);
+    }
+    for (const s of this.graph.struts) {
+      this.strutsById.set(s.id, s);
+    }
   }
 
   private notify(): void {
@@ -487,7 +508,7 @@ export class BuildController {
     if (!rect) return null;
     const cam = this.sceneMgr.camera;
     cam.updateMatrixWorld();
-    const v = new THREE.Vector3();
+    const v = this.tmpVec;
     let best: Vec3 | null = null;
     let bestScore = Infinity;
     for (const k of this.corners.values()) {
@@ -517,7 +538,7 @@ export class BuildController {
     const piece = this.blockBatches.handleAt(hit);
     const info = piece && this.pieces.get(piece);
     if (piece && info) {
-      const base = this.graph.blocks.find((b) => b.id === info.id);
+      const base = this.blocksById.get(info.id);
       if (!base || !hit.face) return null;
       // Face normals are in geometry space: rotate by the instance, then by the batch mesh.
       const n = hit.face.normal
@@ -661,8 +682,8 @@ export class BuildController {
   private eraseWithMirror(m: PieceHandle): boolean {
     const info = this.pieces.get(m);
     if (!info) return false;
-    const piece = this.graph.blocks.find((b) => b.id === info.id);
-    const strut = this.graph.struts.find((s) => s.id === info.id);
+    const piece = this.blocksById.get(info.id);
+    const strut = this.strutsById.get(info.id);
     return this.commit((g) => {
       let changed = false;
       if (info.kind === 'block' && piece) {
@@ -682,8 +703,8 @@ export class BuildController {
   private paintWithMirror(m: PieceHandle): boolean {
     const info = this.pieces.get(m);
     if (!info) return false;
-    const piece = this.graph.blocks.find((b) => b.id === info.id);
-    const strut = this.graph.struts.find((s) => s.id === info.id);
+    const piece = this.blocksById.get(info.id);
+    const strut = this.strutsById.get(info.id);
     return this.commit((g) => {
       let changed = this.paintIn(g, info.kind, info.id, this.material);
       if (this.mirrorX) {
@@ -721,7 +742,7 @@ export class BuildController {
         const ghost = this.blockGhosts[i];
         const valid =
           cellInBounds(c) &&
-          !this.graph.blocks.some((b) => sameVec(b.cell, c)) &&
+          !this.blocksByCell.has(key(c)) &&
           isMaterialAllowed(this.constraints, this.material) &&
           canAddBlock(this.constraints, this.graph.blocks.length + i);
         ghost.material = this.ghostMat(valid);
@@ -743,7 +764,7 @@ export class BuildController {
           const ghost = this.strutGhosts[i];
           const valid =
             isStrutValid(this.graph, a, b) &&
-            !this.graph.struts.some((s) => s.id === strutId(a, b)) &&
+            !this.strutsById.has(strutId(a, b)) &&
             isMaterialAllowed(this.constraints, this.material);
           ghost.material = this.ghostMat(valid);
           this.orientStrut(

@@ -49,6 +49,11 @@ class UIStore {
 
 export const uiStore = new UIStore();
 
-export function useUIState(): UIState {
-  return useSyncExternalStore(uiStore.subscribe, uiStore.getState);
+export function useUIState(): UIState;
+export function useUIState<T>(selector: (state: UIState) => T): T;
+export function useUIState<T>(selector?: (state: UIState) => T): UIState | T {
+  return useSyncExternalStore<UIState | T>(
+    uiStore.subscribe,
+    selector ? () => selector(uiStore.getState()) : uiStore.getState,
+  );
 }
