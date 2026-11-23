@@ -257,7 +257,7 @@ export type Strength = 'gentle' | 'medium' | 'strong';
 export const STRENGTH_ORDER: readonly Strength[] = ['gentle', 'medium', 'strong'];
 export const DEFAULT_STRENGTH: Strength = 'medium';
 
-/** 0 = everything collapsed, 3 = not a single joint broke. */
+/** 3 = not a single joint broke; else 2 at >= 80 % standing, 1 at >= 50 %, 0 below (see starsFor). */
 export type Stars = 0 | 1 | 2 | 3;
 
 export interface Telemetry {
@@ -265,7 +265,10 @@ export interface Telemetry {
   timeRemaining: number;
   /** Strength of the current (or next) disaster. */
   strength: Strength;
-  /** Fraction (0..1) of joints still intact; 1 while building. Basis of the star rating. */
+  /**
+   * Fraction (0..1) of pieces (blocks and struts) still standing: still held by an intact joint and
+   * not displaced from where they started. 1 while building. Basis of the star rating.
+   */
   standingRatio: number;
   /** Star rating of the run so far; only final once mode is survived or failed. 0 while building. */
   stars: Stars;
