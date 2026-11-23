@@ -9,7 +9,8 @@ import { MATERIALS } from '../types/blueprint';
 
 const BLOCK_SIZE = 1.96;
 const BLOCK_RADIUS = 0.22;
-const BLOCK_SEGMENTS = 4;
+/** Rounded-edge segments; 2 looks the same as 4 at play zoom with ~3x fewer triangles (300 vs 972). */
+const BLOCK_SEGMENTS = 2;
 const STRUT_RADIUS = 0.15;
 const TEXTURE_SIZE = 256;
 const MASTER_VOLUME = 0.6;
