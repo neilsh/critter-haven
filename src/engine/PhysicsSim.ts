@@ -6,7 +6,7 @@
  * strain ratio > 1 removes the joint and records the FIRST broken id; survive 8 s with zero broken
  * joints to win. Initialise Rapier lazily on `start` (rapier3d-compat embeds its wasm, no fetch).
  *
- * Must be runnable headless in Node (Vitest) when given a `MeshRegistry` of plain objects, so the
+ * Must be runnable headless in Node (Vitest) when given a `MeshRegistry` of plain PieceHandles, so the
  * tower-fails / house-survives calibration does not need a browser. Use a seeded RNG for gusts/hail.
  *
  * Lifecycle: start() -> mode 'simulating', isRunning() true. When the countdown reaches 0 the sim
@@ -66,6 +66,7 @@ import {
   key,
 } from '../types/blueprint';
 import type { MeshRegistry } from './BuildController';
+import type { PieceHandle } from './InstancedPieces';
 
 type PhysicsTelemetry = Pick<
   Telemetry,
@@ -186,19 +187,10 @@ function strainColor(s: number, out: THREE.Color) {
   return out.copy(STRAIN_COLORS[i]).lerp(STRAIN_COLORS[i + 1], x - i);
 }
 
-/** Stress X-ray: emissive tint by strain ratio. Meshes own their material instance (BuildController contract). */
-function tint(mesh: THREE.Mesh, strain: number) {
-  const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-  for (const m of mats) {
-    if (
-      m instanceof THREE.MeshStandardMaterial ||
-      m instanceof THREE.MeshLambertMaterial ||
-      m instanceof THREE.MeshPhongMaterial
-    ) {
-      m.emissive.copy(strainColor(strain, tmpColor));
-      m.emissiveIntensity = 0.25 + 0.6 * clamp01(strain);
-    }
-  }
+/** Stress X-ray: emissive tint by strain ratio, per piece handle (drawn as a per-instance colour). */
+function tint(piece: PieceHandle, strain: number) {
+  piece.emissive.copy(strainColor(strain, tmpColor));
+  piece.emissiveIntensity = 0.25 + 0.6 * clamp01(strain);
 }
 
 const v3 = (p: { x: number; y: number; z: number }) => new THREE.Vector3(p.x, p.y, p.z);
@@ -320,7 +312,7 @@ export class PhysicsSim {
 interface BlockRec {
   data: BlockData;
   body: RigidBody;
-  mesh: THREE.Mesh | undefined;
+  mesh: PieceHandle | undefined;
   /** Mesh pose relative to the body, captured at start (keeps us agnostic of mesh conventions). */
   meshOffsetPos: THREE.Vector3;
   meshOffsetQuat: THREE.Quaternion;
@@ -343,7 +335,7 @@ interface StrutEnd {
 
 interface StrutRec {
   data: StrutData;
-  mesh: THREE.Mesh | undefined;
+  mesh: PieceHandle | undefined;
   initA: THREE.Vector3;
   initB: THREE.Vector3;
   /** Mesh pose at start; after breaking, relative to the debris body instead. */

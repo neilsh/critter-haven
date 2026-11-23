@@ -1,7 +1,8 @@
 /**
  * OWNER: package C (build mode, tools, undo). Contract below is fixed; internals are yours.
- * Build mode renders directly from the BlueprintGraph with no physics. Every mesh gets its OWN
- * material instance from `assets.createMaterial` so the physics X-ray can tint meshes individually.
+ * Build mode renders directly from the BlueprintGraph with no physics. Pieces are drawn instanced
+ * (one InstancedMesh per geometry + material type, see InstancedPieces); each piece is a PieceHandle
+ * with its own pose and emissive tint, so the physics X-ray can still move and tint pieces one by one.
  * Graph changes must go through `commit`-style methods so undo history stays correct.
  */
 import * as THREE from 'three';
@@ -32,17 +33,19 @@ import {
   strutId,
 } from '../types/blueprint';
 import { canAddBlock, isMaterialAllowed } from '../levels/constraints';
+import { InstancedPieces, PieceHandle } from './InstancedPieces';
 import type { AudioSynth, ProceduralAssets } from './ProceduralAssets';
 import type { SceneManager } from './SceneManager';
 
 /**
- * Mesh lookup the physics sim uses to move/tint pieces. Keyed by BlockData.id / StrutData.id.
- * Meshes are direct children of `SceneManager.buildRoot`, so their position/quaternion are world
- * transforms. three.js core runs in Node, so headless tests can fill this with plain `new THREE.Mesh()`.
+ * Piece lookup the physics sim uses to move/tint pieces. Keyed by BlockData.id / StrutData.id.
+ * Handle poses are world transforms (the instanced meshes sit directly under `SceneManager.buildRoot`)
+ * and are copied to the GPU just before each render. Handles are plain objects, so headless tests can
+ * fill this with `new PieceHandle()`.
  */
 export interface MeshRegistry {
-  blocks: Map<string, THREE.Mesh>;
-  struts: Map<string, THREE.Mesh>;
+  blocks: Map<string, PieceHandle>;
+  struts: Map<string, PieceHandle>;
 }
 
 const MAX_HISTORY = 100;
@@ -59,20 +62,9 @@ type MeshKind = 'block' | 'strut';
 interface PieceInfo {
   kind: MeshKind;
   id: string;
-  material: MaterialType;
 }
 
 const sameVec = (a: Vec3, b: Vec3) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
-
-/** Dispose a mesh's own material(s). Geometry is shared via ProceduralAssets and never disposed here. */
-function disposeMaterial(m: THREE.Mesh): void {
-  for (const mat of Array.isArray(m.material) ? m.material : [m.material]) mat.dispose();
-}
-
-/** Emissive colour of a piece's material, when it has one (createMaterial returns MeshStandardMaterial). */
-function emissiveOf(m: THREE.Mesh): THREE.Color | null {
-  return m.material instanceof THREE.MeshStandardMaterial ? m.material.emissive : null;
-}
 
 type PointerType = 'pointerdown' | 'pointermove' | 'pointerup' | 'pointerleave' | 'pointercancel';
 
@@ -97,7 +89,7 @@ export class BuildController {
   private pointer: { x: number; y: number } | null = null;
   private pressed: { x: number; y: number; id: number } | null = null;
   private braceStart: Vec3 | null = null;
-  private hoverPiece: THREE.Mesh | null = null;
+  private hoverPiece: PieceHandle | null = null;
   private highlightId: string | null = null;
 
   // ghosts live in the scene (not buildRoot) so they never reach the physics registry
@@ -113,13 +105,18 @@ export class BuildController {
   private readonly unsubFrame: () => void;
   private readonly dom: HTMLElement | null;
   private readonly unlisten: Array<() => void> = [];
-  /** Which graph piece each block/strut mesh renders. */
-  private readonly pieces = new WeakMap<THREE.Object3D, PieceInfo>();
+  /** Which graph piece each handle renders. */
+  private readonly pieces = new WeakMap<PieceHandle, PieceInfo>();
+  private readonly blockBatches: InstancedPieces;
+  private readonly strutBatches: InstancedPieces;
+  /** Scene before-render hook that was installed before ours; ours chains to it and restores it. */
+  private readonly prevBeforeRender: THREE.Object3D['onBeforeRender'];
+  private readonly beforeRender: THREE.Object3D['onBeforeRender'];
   private time = 0;
 
   constructor(
     private readonly sceneMgr: SceneManager,
-    private readonly assets: ProceduralAssets,
+    assets: ProceduralAssets,
     private readonly audio: AudioSynth,
   ) {
     const mk = (color: number) => {
@@ -151,6 +148,19 @@ export class BuildController {
       this.ghostRoot.add(bg, sg);
     }
     sceneMgr.scene.add(this.ghostRoot);
+
+    const createMaterial = (t: MaterialType) => assets.createMaterial(t);
+    this.blockBatches = new InstancedPieces(sceneMgr.buildRoot, assets.getBlockGeometry(), createMaterial);
+    this.strutBatches = new InstancedPieces(sceneMgr.buildRoot, assets.getStrutGeometry(), createMaterial);
+    // Physics moves handles in its own frame callback, which may run after ours, so upload in the
+    // scene's before-render hook: it fires inside renderer.render() before any culling or shadow pass.
+    const scene = sceneMgr.scene;
+    this.prevBeforeRender = scene.onBeforeRender.bind(scene);
+    this.beforeRender = (...args) => {
+      this.prevBeforeRender(...args);
+      this.flushInstances();
+    };
+    scene.onBeforeRender = this.beforeRender;
 
     this.rebuildCorners();
     this.unsubFrame = sceneMgr.onFrame((dt) => this.onFrame(dt));
@@ -258,17 +268,15 @@ export class BuildController {
       const m = this.meshes.struts.get(s.id);
       if (m) this.placeStrutMesh(m, s.a, s.b);
     }
-    for (const m of this.allMeshes()) {
-      m.visible = true;
-      this.setEmissive(m, 0x000000);
-    }
+    for (const m of this.allPieces()) this.setEmissive(m, 0x000000);
     this.hoverPiece = null;
+    this.flushInstances();
     this.notify();
   }
   /** Pulsing red glow on the piece that broke first, or null to clear. */
   highlight(id: string | null): void {
     if (this.highlightId && this.highlightId !== id) {
-      const old = this.findMesh(this.highlightId);
+      const old = this.findPiece(this.highlightId);
       if (old) this.setEmissive(old, 0x000000);
     }
     this.highlightId = id;
@@ -285,7 +293,10 @@ export class BuildController {
     this.unlisten.forEach((off) => off());
     this.unlisten.length = 0;
     this.sceneMgr.setControlsEnabled(true);
-    for (const m of this.allMeshes()) this.disposeMesh(m);
+    if (this.sceneMgr.scene.onBeforeRender === this.beforeRender)
+      this.sceneMgr.scene.onBeforeRender = this.prevBeforeRender;
+    this.blockBatches.dispose();
+    this.strutBatches.dispose();
     this.meshes.blocks.clear();
     this.meshes.struts.clear();
     this.sceneMgr.scene.remove(this.ghostRoot);
@@ -356,62 +367,59 @@ export class BuildController {
   // ------------------------------------------------------------------ meshes
 
   private syncMeshes(): void {
-    const root = this.sceneMgr.buildRoot;
     const sync = <T extends { id: string; material: MaterialType }>(
       items: T[],
-      reg: Map<string, THREE.Mesh>,
+      reg: Map<string, PieceHandle>,
+      batches: InstancedPieces,
       kind: MeshKind,
-      geometry: THREE.BufferGeometry,
-      place: (m: THREE.Mesh, item: T) => void,
+      place: (h: PieceHandle, item: T) => void,
     ) => {
       const live = new Set(items.map((i) => i.id));
-      for (const [id, m] of reg) {
+      for (const [id, h] of reg) {
         if (!live.has(id)) {
-          if (this.hoverPiece === m) this.hoverPiece = null;
-          root.remove(m);
-          this.disposeMesh(m);
+          if (this.hoverPiece === h) this.hoverPiece = null;
+          batches.remove(h);
           reg.delete(id);
         }
       }
       for (const item of items) {
-        let m = reg.get(item.id);
-        const info = m && this.pieces.get(m);
-        if (m && info && info.material !== item.material) {
-          disposeMaterial(m);
-          m.material = this.assets.createMaterial(item.material);
-          info.material = item.material;
-        } else if (!m) {
-          m = new THREE.Mesh(geometry, this.assets.createMaterial(item.material));
-          this.pieces.set(m, { kind, id: item.id, material: item.material });
-          m.castShadow = true;
-          m.receiveShadow = true;
-          root.add(m);
-          reg.set(item.id, m);
+        let h = reg.get(item.id);
+        if (!h) {
+          h = new PieceHandle();
+          this.pieces.set(h, { kind, id: item.id });
+          reg.set(item.id, h);
         }
-        place(m, item);
-        m.visible = true;
-        this.setEmissive(m, 0x000000);
+        if (batches.typeOf(h) !== item.material) batches.add(h, item.material);
+        place(h, item);
+        this.setEmissive(h, 0x000000);
       }
     };
-    sync(this.graph.blocks, this.meshes.blocks, 'block', this.assets.getBlockGeometry(), (m, b) =>
-      this.placeBlockMesh(m, b.cell),
+    sync(this.graph.blocks, this.meshes.blocks, this.blockBatches, 'block', (h, b) =>
+      this.placeBlockMesh(h, b.cell),
     );
-    sync(this.graph.struts, this.meshes.struts, 'strut', this.assets.getStrutGeometry(), (m, s) =>
-      this.placeStrutMesh(m, s.a, s.b),
+    sync(this.graph.struts, this.meshes.struts, this.strutBatches, 'strut', (h, s) =>
+      this.placeStrutMesh(h, s.a, s.b),
     );
+    // Raycasts for the next preview read the instance buffers, so upload now rather than at render.
+    this.flushInstances();
   }
 
-  private placeBlockMesh(m: THREE.Mesh, cell: Vec3): void {
+  private flushInstances(): void {
+    this.blockBatches.flush();
+    this.strutBatches.flush();
+  }
+
+  private placeBlockMesh(m: PieceHandle, cell: Vec3): void {
     m.position.set(...cellToWorld(cell));
     m.quaternion.identity();
     m.scale.set(1, 1, 1);
   }
 
-  private placeStrutMesh(m: THREE.Mesh, a: Vec3, b: Vec3): void {
+  private placeStrutMesh(m: PieceHandle, a: Vec3, b: Vec3): void {
     this.orientStrut(m, new THREE.Vector3(...cornerToWorld(a)), new THREE.Vector3(...cornerToWorld(b)));
   }
 
-  private orientStrut(m: THREE.Object3D, pa: THREE.Vector3, pb: THREE.Vector3): void {
+  private orientStrut(m: PieceHandle | THREE.Object3D, pa: THREE.Vector3, pb: THREE.Vector3): void {
     const dir = pb.clone().sub(pa);
     const len = dir.length() || 0.001;
     m.position.copy(pa).addScaledVector(dir, 0.5);
@@ -419,30 +427,25 @@ export class BuildController {
     m.scale.set(1, len, 1);
   }
 
-  private disposeMesh(m: THREE.Mesh): void {
-    disposeMaterial(m);
-    m.parent?.remove(m);
-  }
-
-  private allMeshes(): THREE.Mesh[] {
+  private allPieces(): PieceHandle[] {
     return [...this.meshes.blocks.values(), ...this.meshes.struts.values()];
   }
 
-  private findMesh(id: string): THREE.Mesh | undefined {
+  private findPiece(id: string): PieceHandle | undefined {
     return this.meshes.blocks.get(id) ?? this.meshes.struts.get(id);
   }
 
-  private setEmissive(m: THREE.Mesh, color: number): void {
-    emissiveOf(m)?.setHex(color);
+  private setEmissive(h: PieceHandle, color: number): void {
+    h.emissive.setHex(color);
   }
 
   private onFrame(dt: number): void {
     this.time += dt;
     if (!this.highlightId) return;
-    const m = this.findMesh(this.highlightId);
+    const m = this.findPiece(this.highlightId);
     if (!m) return;
     const pulse = 0.35 + 0.35 * Math.sin(this.time * 8);
-    emissiveOf(m)?.setRGB(pulse + 0.3, 0, 0);
+    m.emissive.setRGB(pulse + 0.3, 0, 0);
   }
 
   private rebuildCorners(): void {
@@ -500,16 +503,21 @@ export class BuildController {
   /** Cell a new block would go into for the current pointer, or null. */
   private pickPlacementCell(): Vec3 | null {
     const hits = this.raycaster.intersectObjects(
-      [...this.meshes.blocks.values(), this.sceneMgr.islandTop],
+      [...this.blockBatches.meshes(), this.sceneMgr.islandTop],
       false,
     );
     const hit = hits[0];
     if (!hit) return null;
-    const info = this.pieces.get(hit.object);
-    if (info) {
+    const piece = this.blockBatches.handleAt(hit);
+    const info = piece && this.pieces.get(piece);
+    if (piece && info) {
       const base = this.graph.blocks.find((b) => b.id === info.id);
       if (!base || !hit.face) return null;
-      const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
+      // Face normals are in geometry space: rotate by the instance, then by the batch mesh.
+      const n = hit.face.normal
+        .clone()
+        .applyQuaternion(piece.quaternion)
+        .transformDirection(hit.object.matrixWorld);
       const axis = [Math.abs(n.x), Math.abs(n.y), Math.abs(n.z)];
       const i = axis.indexOf(Math.max(...axis));
       const cell: Vec3 = [...base.cell];
@@ -522,12 +530,21 @@ export class BuildController {
     return [cx, 0, cz];
   }
 
-  private pickPiece(kinds: MeshKind[]): THREE.Mesh | null {
-    const list: THREE.Mesh[] = [];
-    if (kinds.includes('block')) list.push(...this.meshes.blocks.values());
-    if (kinds.includes('strut')) list.push(...this.meshes.struts.values());
-    const hit = this.raycaster.intersectObjects(list, false)[0]?.object;
-    return hit instanceof THREE.Mesh ? hit : null;
+  private pickPiece(kinds: MeshKind[]): PieceHandle | null {
+    const sets = [
+      ...(kinds.includes('block') ? [this.blockBatches] : []),
+      ...(kinds.includes('strut') ? [this.strutBatches] : []),
+    ];
+    const hit = this.raycaster.intersectObjects(
+      sets.flatMap((p) => p.meshes()),
+      false,
+    )[0];
+    if (!hit) return null;
+    for (const p of sets) {
+      const h = p.handleAt(hit);
+      if (h) return h;
+    }
+    return null;
   }
 
   private onPointerDown(e: PointerEvent): void {
@@ -635,7 +652,7 @@ export class BuildController {
     return ok;
   }
 
-  private eraseWithMirror(m: THREE.Mesh): boolean {
+  private eraseWithMirror(m: PieceHandle): boolean {
     const info = this.pieces.get(m);
     if (!info) return false;
     const piece = this.graph.blocks.find((b) => b.id === info.id);
@@ -656,7 +673,7 @@ export class BuildController {
     });
   }
 
-  private paintWithMirror(m: THREE.Mesh): boolean {
+  private paintWithMirror(m: PieceHandle): boolean {
     const info = this.pieces.get(m);
     if (!info) return false;
     const piece = this.graph.blocks.find((b) => b.id === info.id);

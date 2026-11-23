@@ -136,8 +136,9 @@ export class ProceduralAssets {
   }
 
   /**
-   * A NEW material instance on every call (the physics X-ray tints each mesh's emissive separately).
-   * Callers own and dispose the returned material. Textures may be shared and cached.
+   * A NEW material instance on every call; callers own and dispose it. Textures are shared and cached.
+   * BuildController asks for one per material type and piece kind and draws every piece of that type
+   * through it with instancing (per-piece X-ray tints are instance colours, see InstancedPieces).
    */
   createMaterial(type: MaterialType): THREE.MeshStandardMaterial {
     const map = this.getTexture(type);
