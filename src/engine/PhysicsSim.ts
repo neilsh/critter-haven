@@ -960,7 +960,9 @@ class SimRun {
       if (s.debris || s.endA?.rec?.fallen || s.endB?.rec?.fallen) s.fallen = true;
     }
     const total = this.blocks.length + this.struts.length;
-    const fallen = this.blocks.filter((b) => b.fallen).length + this.struts.filter((s) => s.fallen).length;
+    let fallen = 0;
+    for (const b of this.blocks) if (b.fallen) fallen++;
+    for (const s of this.struts) if (s.fallen) fallen++;
     this.standingRatio = total === 0 ? 1 : (total - fallen) / total;
   }
 

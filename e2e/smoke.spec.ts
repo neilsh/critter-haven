@@ -60,6 +60,18 @@ test.describe('boot', () => {
   });
 });
 
+test.describe('strength picker', () => {
+  test('picks a strength and shows the full countdown while building', async ({ page }) => {
+    await openGame(page);
+    await expect(page.getByTestId('countdown')).toHaveText('8');
+    await page.getByTestId('strength-strong').click();
+    await expect(page.getByTestId('strength-strong')).toHaveAttribute('aria-pressed', 'true');
+    expect((await telemetry(page)).strength).toBe('strong');
+    await page.getByTestId('strength-gentle').click();
+    expect((await telemetry(page)).strength).toBe('gentle');
+  });
+});
+
 test.describe('towers and houses', () => {
   test.fixme(PENDING.presets || PENDING.physics, 'needs presets (pkg C) and PhysicsSim (pkg A)');
 
@@ -71,6 +83,11 @@ test.describe('towers and houses', () => {
     await page.evaluate(() => window.__GAME_DEBUG__!.startDisaster('earthquake', 1));
     await waitForMode(page, 'failed');
     expect((await telemetry(page)).firstBrokenId).not.toBeNull();
+    await expect(page.getByTestId('lose-banner')).toBeAttached();
+    await expect(page.getByTestId('result-banner')).toBeVisible();
+    await expect(page.getByTestId('star-row')).toBeVisible();
+    // The countdown stays at 0 after the run instead of jumping back to 8.
+    await expect(page.getByTestId('countdown')).toHaveText('0');
     await page.screenshot({ path: 'test-results/tower-failed.png' });
 
     await page.evaluate(() => window.__GAME_DEBUG__!.rewind());
@@ -89,7 +106,9 @@ test.describe('towers and houses', () => {
     await page.evaluate(() => window.__GAME_DEBUG__!.startDisaster('earthquake', 1));
     await waitForMode(page, 'survived');
     expect((await telemetry(page)).firstBrokenId).toBeNull();
-    await expect(page.getByTestId('win-banner')).toBeVisible();
+    await expect(page.getByTestId('win-banner')).toBeAttached();
+    await expect(page.getByTestId('star-row')).toBeVisible();
+    await expect(page.getByTestId('countdown')).toHaveText('0');
     await page.screenshot({ path: 'test-results/house-survived.png' });
   });
 });
