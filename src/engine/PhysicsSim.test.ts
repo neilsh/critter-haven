@@ -14,29 +14,26 @@ import type {
 } from '../types/blueprint';
 import { DISASTER_SECONDS, PRESETS, blockId, cellToWorld, cornerToWorld, strutId } from '../types/blueprint';
 import type { MeshRegistry } from './BuildController';
+import { PieceHandle } from './InstancedPieces';
 import { PHYSICS_TUNING, PhysicsSim, starsFor } from './PhysicsSim';
 
 const SEEDS = [1, 2, 3, 4, 5];
 
-function meshesFor(g: BlueprintGraph, parent = new THREE.Group()): MeshRegistry {
+function meshesFor(g: BlueprintGraph): MeshRegistry {
   const reg: MeshRegistry = { blocks: new Map(), struts: new Map() };
   for (const b of g.blocks) {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), new THREE.MeshStandardMaterial());
-    m.position.set(...cellToWorld(b.cell));
-    parent.add(m);
-    reg.blocks.set(b.id, m);
+    const h = new PieceHandle();
+    h.position.set(...cellToWorld(b.cell));
+    reg.blocks.set(b.id, h);
   }
   for (const s of g.struts) {
     const a = new THREE.Vector3(...cornerToWorld(s.a));
     const b = new THREE.Vector3(...cornerToWorld(s.b));
-    const m = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.1, 0.1, a.distanceTo(b)),
-      new THREE.MeshStandardMaterial(),
-    );
-    m.position.copy(a).add(b).multiplyScalar(0.5);
-    m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
-    parent.add(m);
-    reg.struts.set(s.id, m);
+    const h = new PieceHandle();
+    h.position.copy(a).add(b).multiplyScalar(0.5);
+    h.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
+    h.scale.y = a.distanceTo(b);
+    reg.struts.set(s.id, h);
   }
   return reg;
 }
@@ -221,7 +218,7 @@ describe('other disasters', () => {
   it.each(SEEDS)('hail: house survives, hail stones appear and are cleaned up (seed %i)', async (seed) => {
     const g = PRESETS.house();
     const root = new THREE.Group();
-    const meshes = meshesFor(g, new THREE.Group());
+    const meshes = meshesFor(g);
     const before = root.children.length;
     const sim = new PhysicsSim();
     sim.setEffectsRoot(root);
@@ -265,8 +262,7 @@ describe('stress X-ray and meshes', () => {
     let maxEmissive = 0;
     while (sim.isRunning()) {
       sim.update(1 / 60);
-      const mat = top?.material;
-      if (mat instanceof THREE.MeshStandardMaterial) maxEmissive = Math.max(maxEmissive, mat.emissive.r);
+      maxEmissive = Math.max(maxEmissive, top?.emissive.r ?? 0);
     }
     expect(top?.position.distanceTo(start ?? new THREE.Vector3())).toBeGreaterThan(0.01);
     // Strain above ~0.5 turns the tint from green towards yellow/orange (red channel rises).

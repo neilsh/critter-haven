@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import type { MeshRegistry } from '../engine/BuildController';
+import { PieceHandle } from '../engine/InstancedPieces';
 import { PhysicsSim } from '../engine/PhysicsSim';
 import type { BlueprintGraph, MaterialType, Stars, Vec3 } from '../types/blueprint';
 import { DISASTER_SECONDS, blockId, cellToWorld, cornerToWorld, strutId } from '../types/blueprint';
@@ -15,20 +16,18 @@ import { LEVELS, type Level } from './levels';
 function meshesFor(g: BlueprintGraph): MeshRegistry {
   const reg: MeshRegistry = { blocks: new Map(), struts: new Map() };
   for (const b of g.blocks) {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), new THREE.MeshStandardMaterial());
-    m.position.set(...cellToWorld(b.cell));
-    reg.blocks.set(b.id, m);
+    const h = new PieceHandle();
+    h.position.set(...cellToWorld(b.cell));
+    reg.blocks.set(b.id, h);
   }
   for (const s of g.struts) {
     const a = new THREE.Vector3(...cornerToWorld(s.a));
     const b = new THREE.Vector3(...cornerToWorld(s.b));
-    const m = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.1, 0.1, a.distanceTo(b)),
-      new THREE.MeshStandardMaterial(),
-    );
-    m.position.copy(a).add(b).multiplyScalar(0.5);
-    m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
-    reg.struts.set(s.id, m);
+    const h = new PieceHandle();
+    h.position.copy(a).add(b).multiplyScalar(0.5);
+    h.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
+    h.scale.y = a.distanceTo(b);
+    reg.struts.set(s.id, h);
   }
   return reg;
 }

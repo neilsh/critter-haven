@@ -9,7 +9,8 @@ import { MATERIALS } from '../types/blueprint';
 
 const BLOCK_SIZE = 1.96;
 const BLOCK_RADIUS = 0.22;
-const BLOCK_SEGMENTS = 4;
+/** Rounded-edge segments; 2 looks the same as 4 at play zoom with ~3x fewer triangles (300 vs 972). */
+const BLOCK_SEGMENTS = 2;
 const STRUT_RADIUS = 0.15;
 const TEXTURE_SIZE = 256;
 const MASTER_VOLUME = 0.6;
@@ -136,8 +137,9 @@ export class ProceduralAssets {
   }
 
   /**
-   * A NEW material instance on every call (the physics X-ray tints each mesh's emissive separately).
-   * Callers own and dispose the returned material. Textures may be shared and cached.
+   * A NEW material instance on every call; callers own and dispose it. Textures are shared and cached.
+   * BuildController asks for one per material type and piece kind and draws every piece of that type
+   * through it with instancing (per-piece X-ray tints are instance colours, see InstancedPieces).
    */
   createMaterial(type: MaterialType): THREE.MeshStandardMaterial {
     const map = this.getTexture(type);

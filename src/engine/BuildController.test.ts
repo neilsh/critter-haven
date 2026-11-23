@@ -5,11 +5,6 @@ import { AudioSynth, ProceduralAssets } from './ProceduralAssets';
 import type { SceneManager } from './SceneManager';
 import { ISLAND_SIZE, cornerToWorld, strutId } from '../types/blueprint';
 
-function standardMaterial(m: THREE.Mesh): THREE.MeshStandardMaterial {
-  if (!(m.material instanceof THREE.MeshStandardMaterial)) throw new Error('expected MeshStandardMaterial');
-  return m.material;
-}
-
 function setup() {
   const captured = new Set<number>();
   const dom = Object.assign(new EventTarget(), {
@@ -90,10 +85,10 @@ describe('BuildController', () => {
     expect(n).toBe(1);
     const m = bc.meshes.blocks.get('b:2,0,2')!;
     m.position.y += 5;
-    standardMaterial(m).emissive.setHex(0xff0000);
+    m.emissive.setHex(0xff0000);
     bc.resetMeshes();
     expect(m.position.y).toBe(1);
-    expect(standardMaterial(m).emissive.getHex()).toBe(0);
+    expect(m.emissive.getHex()).toBe(0);
   });
 
   it('loadPreset replaces the graph and clears history', () => {
@@ -222,5 +217,91 @@ describe('BuildController constraints', () => {
     bc.setConstraints({ maxBlocks: 1 });
     expect(bc.getGraph().blocks).toHaveLength(2);
     expect(bc.placeBlock([2, 0, 0], 'wood')).toBe(false);
+  });
+});
+
+/** Instanced meshes in `root` that draw something. */
+const instanced = (root: THREE.Object3D) =>
+  root.children.filter((c): c is THREE.InstancedMesh => c instanceof THREE.InstancedMesh && c.visible);
+
+describe('BuildController instancing', () => {
+  it('draws a full 8x8x4 build with one instanced mesh per material', () => {
+    const { bc, scene } = setup();
+    const types = ['wood', 'stone', 'bamboo', 'foam'] as const;
+    for (let y = 0; y < 4; y++)
+      for (let x = 0; x < 8; x++)
+        for (let z = 0; z < 8; z++) bc.placeBlock([x, y, z], types[(x + y + z) % 4]);
+    const meshes = instanced(scene.buildRoot);
+    expect(meshes).toHaveLength(4);
+    expect(meshes.reduce((n, m) => n + m.count, 0)).toBe(256);
+    // No per-piece meshes are left in the build root.
+    expect(scene.buildRoot.children.every((c) => c instanceof THREE.InstancedMesh)).toBe(true);
+  });
+
+  it('copies handle pose and tint into the instance buffers before each render', () => {
+    const { bc, scene } = setup();
+    bc.placeBlock([2, 0, 2], 'wood');
+    const h = bc.meshes.blocks.get('b:2,0,2')!;
+    h.position.y = 7;
+    h.emissive.setRGB(1, 0.5, 0);
+    h.emissiveIntensity = 0.5;
+    const s = scene.scene;
+    s.onBeforeRender(
+      undefined as never,
+      s,
+      scene.camera,
+      null as never,
+      undefined as never,
+      undefined as never,
+    );
+    const [mesh] = instanced(scene.buildRoot);
+    const m = new THREE.Matrix4();
+    mesh.getMatrixAt(0, m);
+    expect(new THREE.Vector3().setFromMatrixPosition(m).y).toBe(7);
+    const c = new THREE.Color();
+    mesh.getColorAt(0, c);
+    expect([c.r, c.g, c.b]).toEqual([0.5, 0.25, 0]);
+  });
+
+  it('repaint moves a piece between batches and erase frees its slot', () => {
+    const { bc, fire, screen, scene } = setup();
+    bc.placeBlock([3, 0, 3], 'wood');
+    bc.placeBlock([4, 0, 3], 'wood');
+    const p = screen([-1, 1, -1]); // block [3,0,3]
+    bc.setTool('paint');
+    bc.setMaterial('foam');
+    fire('pointerdown', p[0], p[1]);
+    fire('pointerup', p[0], p[1]);
+    expect(bc.getGraph().blocks.find((b) => b.id === 'b:3,0,3')?.material).toBe('foam');
+    expect(instanced(scene.buildRoot).map((m) => [m.name, m.count])).toEqual([
+      ['pieces:wood', 1],
+      ['pieces:foam', 1],
+    ]);
+    bc.setTool('erase');
+    fire('pointerdown', p[0], p[1]);
+    fire('pointerup', p[0], p[1]);
+    expect(bc.getGraph().blocks.map((b) => b.id)).toEqual(['b:4,0,3']);
+    expect(instanced(scene.buildRoot).map((m) => m.name)).toEqual(['pieces:wood']);
+  });
+
+  it('dispose removes the instanced meshes and unhooks the scene', () => {
+    const { bc, scene } = setup();
+    bc.placeBlock([0, 0, 0], 'wood');
+    const h = bc.meshes.blocks.get('b:0,0,0')!;
+    const [mesh] = instanced(scene.buildRoot);
+    bc.dispose();
+    expect(scene.buildRoot.children).toHaveLength(0);
+    h.position.y = 9;
+    scene.scene.onBeforeRender(
+      undefined as never,
+      scene.scene,
+      scene.camera,
+      null as never,
+      undefined as never,
+      undefined as never,
+    );
+    const m = new THREE.Matrix4();
+    mesh.getMatrixAt(0, m);
+    expect(new THREE.Vector3().setFromMatrixPosition(m).y).toBe(1);
   });
 });
