@@ -4,6 +4,7 @@
  * Every effect is a fixed-size pool of instanced meshes (one draw call each, no per-frame
  * allocation), so it stays cheap on tablets. A particle that is not alive is parked at scale 0.
  * Particles shrink instead of fading, which avoids transparency sorting and keeps the look toy-like.
+ * Hail puffs are spawned where the physics reports a stone landing (see hailImpact).
  * `prefers-reduced-motion` turns the shake off and halves the particle rates.
  */
 import * as THREE from 'three';
@@ -15,6 +16,8 @@ const STALE_SECONDS = 0.3;
 const HALF = ISLAND_SIZE / 2;
 const SHAKE_MAX = 0.32;
 const SHAKE_FREQ = 26;
+/** Half-width of the island's rock slab; flood water below the top (y 0) is hidden inside it. */
+const SLAB_HALF = HALF + 1.5;
 
 const scratchM = new THREE.Matrix4();
 const scratchQ = new THREE.Quaternion();
@@ -184,7 +187,7 @@ export class DisasterEffects {
   private level = 0;
   private sinceCall = 0;
   private time = 0;
-  private carry = { dust: 0, leaf: 0, streak: 0, splash: 0, puff: 0 };
+  private carry = { dust: 0, leaf: 0, streak: 0, splash: 0 };
   private waterY = -2;
 
   constructor(
@@ -231,8 +234,12 @@ export class DisasterEffects {
   private readonly baseBackground: THREE.Color;
   private readonly baseFog: THREE.Color;
 
-  /** Called by the physics every step; the intensity is 0..1 and 0 means off. */
+  /** Called by the physics every step; the intensity is 0..1. 0 (run ended or rewound) clears all. */
   setDisaster(disaster: DisasterType, intensity: number): void {
+    if (intensity <= 0) {
+      this.reset();
+      return;
+    }
     this.disaster = disaster;
     this.target = Math.min(1, Math.max(0, intensity));
     this.sinceCall = 0;
@@ -264,7 +271,7 @@ export class DisasterEffects {
           this.spawnSplashes(dt, lv, k);
           break;
         case 'hail':
-          this.spawnPuffs(dt, lv, k);
+          // Puffs come from hailImpact, at the spots where stones actually land.
           break;
       }
     }
@@ -281,6 +288,39 @@ export class DisasterEffects {
     this.shakeOffset.set(0, 0, 0);
     for (const p of this.pools) p.clear();
     this.updateSky(0);
+  }
+
+  /** A hail stone landed at this world point: pop a small icy puff with a few bouncing bits. */
+  hailImpact(x: number, y: number, z: number): void {
+    if (this.disaster !== 'hail' || this.level <= 0) return;
+    this.puffs.spawn({
+      x,
+      y: y + 0.1,
+      z,
+      vx: 0,
+      vy: 0.6,
+      vz: 0,
+      size: 0.3 + Math.random() * 0.2,
+      life: 0.45,
+      grow: 2.4,
+      color: '#f4fbff',
+    });
+    const bits = this.reduced ? 1 : 3;
+    for (let j = 0; j < bits; j++) {
+      const a = Math.random() * Math.PI * 2;
+      this.puffs.spawn({
+        x,
+        y: y + 0.15,
+        z,
+        vx: Math.cos(a) * 2.4,
+        vy: 2.5 + Math.random() * 1.5,
+        vz: Math.sin(a) * 2.4,
+        size: 0.1,
+        gravity: 12,
+        life: 0.5,
+        color: '#dff3ff',
+      });
+    }
   }
 
   dispose(): void {
@@ -359,8 +399,15 @@ export class DisasterEffects {
     if (this.waterY < -1) return;
     const tones = ['#bfe6ff', '#ffffff', '#8fd0ff'];
     for (let n = this.emit('splash', 42 * lv * k, dt); n > 0; n--) {
-      const x = (Math.random() - 0.5) * (ISLAND_SIZE + 6);
-      const z = (Math.random() - 0.5) * (ISLAND_SIZE + 6);
+      let x = (Math.random() - 0.5) * (ISLAND_SIZE + 6);
+      let z = (Math.random() - 0.5) * (ISLAND_SIZE + 6);
+      // While the water is below the island top, splashes inside the rock slab would be hidden:
+      // push them out to the shoreline instead.
+      if (this.waterY < 0 && Math.abs(x) < SLAB_HALF && Math.abs(z) < SLAB_HALF) {
+        const edge = SLAB_HALF + Math.random() * 1.5;
+        if (Math.abs(x) > Math.abs(z)) x = Math.sign(x) * edge;
+        else z = Math.sign(z || 1) * edge;
+      }
       this.splashes.spawn({
         x,
         y: this.waterY + 0.1,
@@ -373,41 +420,6 @@ export class DisasterEffects {
         life: 0.7 + Math.random() * 0.35,
         color: tones[(Math.random() * tones.length) | 0],
       });
-    }
-  }
-
-  private spawnPuffs(dt: number, lv: number, k: number): void {
-    for (let n = this.emit('puff', 11 * lv * k, dt); n > 0; n--) {
-      const x = (Math.random() - 0.5) * ISLAND_SIZE;
-      const z = (Math.random() - 0.5) * ISLAND_SIZE;
-      // A puff ring: a few small bits bounce outwards from the impact point.
-      this.puffs.spawn({
-        x,
-        y: 0.15,
-        z,
-        vx: 0,
-        vy: 0.6,
-        vz: 0,
-        size: 0.3 + Math.random() * 0.2,
-        life: 0.45,
-        grow: 2.4,
-        color: '#f4fbff',
-      });
-      for (let j = 0; j < 3; j++) {
-        const a = Math.random() * Math.PI * 2;
-        this.puffs.spawn({
-          x,
-          y: 0.2,
-          z,
-          vx: Math.cos(a) * 2.4,
-          vy: 2.5 + Math.random() * 1.5,
-          vz: Math.sin(a) * 2.4,
-          size: 0.1,
-          gravity: 12,
-          life: 0.5,
-          color: '#dff3ff',
-        });
-      }
     }
   }
 

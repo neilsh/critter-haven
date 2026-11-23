@@ -19,7 +19,7 @@ import type {
   Vec3,
 } from '../types/blueprint';
 import type { GameActions } from '../types/ui';
-import { DISASTER_SECONDS } from '../types/blueprint';
+import { DEFAULT_STRENGTH, DISASTER_SECONDS } from '../types/blueprint';
 import { uiStore } from '../state/store';
 import { getLevel } from '../levels/levels';
 import { BuildController } from './BuildController';
@@ -59,6 +59,7 @@ export class Game implements GameActions, GameDebugApi {
         else if (disaster === 'earthquake') this.audio.playRumble(intensity);
       },
       onWaterLevel: (y) => this.scene.setWaterLevel(y),
+      onHailImpact: (x, y, z) => this.scene.hailImpact(x, y, z),
     });
 
     this.cleanups.push(
@@ -167,7 +168,7 @@ export class Game implements GameActions, GameDebugApi {
 
   // ------------------------------------------------------------ disaster lifecycle (also debug API)
 
-  async startDisaster(type: DisasterType, seed = 1, strength: Strength = 'medium'): Promise<void> {
+  async startDisaster(type: DisasterType, seed = 1, strength: Strength = DEFAULT_STRENGTH): Promise<void> {
     this.ensureBuildMode();
     const token = ++this.runToken;
     uiStore.setState({ disaster: type, strength });
@@ -185,6 +186,7 @@ export class Game implements GameActions, GameDebugApi {
     this.scene.setWaterLevel(WATER_HIDDEN);
     this.audio.playWind(0);
     this.audio.playRumble(0);
+    this.scene.setDisasterFx(uiStore.getState().disaster, 0);
     this.tick(0);
   }
 

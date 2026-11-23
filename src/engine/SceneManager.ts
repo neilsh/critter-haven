@@ -185,11 +185,17 @@ export class SceneManager {
 
   /**
    * Per-frame disaster visuals: quake shake and dust, wind streaks and leaves, flood splashes, hail
-   * puffs and a gentle sky tint. `intensity` is 0..1 and 0 means off. Call it every physics step;
-   * the effects switch themselves off shortly after the calls stop.
+   * puffs and a gentle sky tint. Called every physics step with `intensity` 0..1, and with 0 when the
+   * run ends or is rewound (0 means off: all effects are removed at once). As a safety net the effects
+   * also switch themselves off shortly after the calls stop. Honours `prefers-reduced-motion`.
    */
   setDisasterFx(disaster: DisasterType, intensity: number): void {
     this.effects.setDisaster(disaster, intensity);
+  }
+
+  /** A hail stone hit the ground or a building at this world point (bottom of the stone). */
+  hailImpact(x: number, y: number, z: number): void {
+    this.effects.hailImpact(x, y, z);
   }
 
   /** Level of the animated flood plane (world y). Hidden when below -1. */
