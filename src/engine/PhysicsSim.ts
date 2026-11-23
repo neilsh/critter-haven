@@ -36,6 +36,7 @@ import * as THREE from 'three';
 import type { BlueprintGraph, BlockData, DisasterType, StrutData, Telemetry, Vec3 } from '../types/blueprint';
 import {
   CELL_SIZE,
+  DEFAULT_STRENGTH,
   DISASTER_SECONDS,
   ISLAND_SIZE,
   MATERIALS,
@@ -44,11 +45,19 @@ import {
   cornerToWorld,
   key,
 } from '../types/blueprint';
+import type { Strength } from '../types/blueprint';
 import type { MeshRegistry } from './BuildController';
 
 type PhysicsTelemetry = Pick<
   Telemetry,
-  'mode' | 'timeRemaining' | 'activeJoints' | 'brokenJoints' | 'firstBrokenId' | 'waterLevel'
+  | 'mode'
+  | 'timeRemaining'
+  | 'activeJoints'
+  | 'brokenJoints'
+  | 'firstBrokenId'
+  | 'waterLevel'
+  | 'standingRatio'
+  | 'stars'
 >;
 
 export interface PhysicsEvents {
@@ -200,7 +209,13 @@ export class PhysicsSim {
   constructor(private events: PhysicsEvents = {}) {}
 
   /** Build the Rapier world from the graph and begin the disaster. */
-  async start(graph: BlueprintGraph, meshes: MeshRegistry, disaster: DisasterType, seed = 1): Promise<void> {
+  async start(
+    graph: BlueprintGraph,
+    meshes: MeshRegistry,
+    disaster: DisasterType,
+    seed = 1,
+    _strength: Strength = DEFAULT_STRENGTH, // CONTRACT STUB: strength scaling not implemented yet
+  ): Promise<void> {
     this.stop();
     const gen = this.generation;
     const rapier = await loadRapier();
@@ -246,6 +261,8 @@ export class PhysicsSim {
         brokenJoints: 0,
         firstBrokenId: null,
         waterLevel: WATER_HIDDEN,
+        standingRatio: 1,
+        stars: 0,
       }
     );
   }
@@ -409,6 +426,9 @@ class SimRun {
       brokenJoints: this.brokenCount,
       firstBrokenId: this.firstBrokenId,
       waterLevel: this.waterLevel,
+      // CONTRACT STUBS: real scoring lands with the star-scoring work.
+      standingRatio: 1,
+      stars: 0,
     };
   }
 

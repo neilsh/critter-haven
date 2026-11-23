@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import { DISASTER_SECONDS } from '../types/blueprint';
+import { DEFAULT_STRENGTH, DISASTER_SECONDS } from '../types/blueprint';
 import type { UIState } from '../types/ui';
 
 type Listener = () => void;
@@ -11,8 +11,14 @@ class UIStore {
     material: 'wood',
     mirrorX: false,
     disaster: 'earthquake',
+    strength: DEFAULT_STRENGTH,
     mode: 'build',
     timeRemaining: DISASTER_SECONDS,
+    standingRatio: 1,
+    stars: 0,
+    standingHistory: [],
+    levelId: null,
+    unlocked: [],
     firstBrokenId: null,
     muted: false,
     canUndo: false,
