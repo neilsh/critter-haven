@@ -5,7 +5,7 @@
  */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import type { Azimuth, Vec3 } from '../types/blueprint';
+import type { Azimuth, DisasterType, Vec3 } from '../types/blueprint';
 import { ISLAND_SIZE } from '../types/blueprint';
 
 // Low enough that the bottom HUD bar does not cover the island's front edge.
@@ -179,6 +179,12 @@ export class SceneManager {
   }
 
   /** Level of the animated flood plane (world y). Hidden when below -1. */
+  /**
+   * Per-frame disaster visuals (dust, wind streaks, rain, sky tint). `intensity` is 0..1 and 0 means
+   * off. CONTRACT STUB: no visuals yet.
+   */
+  setDisasterFx(_disaster: DisasterType, _intensity: number): void {}
+
   setWaterLevel(y: number): void {
     this.water.visible = y >= WATER_HIDDEN_BELOW;
     this.water.position.y = y;

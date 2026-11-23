@@ -75,6 +75,8 @@ describe('PhysicsSim lifecycle', () => {
       brokenJoints: 0,
       firstBrokenId: null,
       waterLevel: -2,
+      standingRatio: 1,
+      stars: 0,
     });
   });
 

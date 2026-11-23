@@ -13,12 +13,17 @@ import { Banners } from './Banners';
 import { BuildPanel } from './BuildPanel';
 import { CameraPanel } from './CameraPanel';
 import { DisasterPanel } from './DisasterPanel';
+import { LevelPanel } from './LevelPanel';
 
 export function HUD({ actions }: { actions: GameActions }) {
   return (
     <div className="pointer-events-none absolute inset-0 select-none font-sans text-sky-950">
       <div className="absolute left-2 top-2">
         <BuildPanel actions={actions} />
+      </div>
+
+      <div className="absolute inset-x-2 top-2 flex justify-center">
+        <LevelPanel actions={actions} />
       </div>
 
       <div className="absolute right-2 top-2 sm:top-24">

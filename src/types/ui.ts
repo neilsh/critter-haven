@@ -1,4 +1,13 @@
-import type { Azimuth, DisasterType, GameMode, MaterialType, PresetName, ToolType } from './blueprint';
+import type {
+  Azimuth,
+  DisasterType,
+  GameMode,
+  MaterialType,
+  PresetName,
+  Stars,
+  Strength,
+  ToolType,
+} from './blueprint';
 
 /** Everything the HUD renders. Written by the engine side, read by React. */
 export interface UIState {
@@ -6,9 +15,20 @@ export interface UIState {
   material: MaterialType;
   mirrorX: boolean;
   disaster: DisasterType;
+  strength: Strength;
   mode: GameMode;
   /** Seconds left in the disaster countdown (DISASTER_SECONDS when idle). */
   timeRemaining: number;
+  /** Fraction of joints still intact (1 while building). */
+  standingRatio: number;
+  /** Star rating of the current/finished run (0 while building). */
+  stars: Stars;
+  /** standingRatio sampled by `Game.tick` during a run (for the HUD stability graph); empty when idle. */
+  standingHistory: number[];
+  /** Id of the active challenge level, or null in free build. */
+  levelId: string | null;
+  /** Ids of unlocked levels. */
+  unlocked: string[];
   /** Id of the first piece that broke in the current run, for the HUD and highlight. */
   firstBrokenId: string | null;
   muted: boolean;
@@ -22,6 +42,9 @@ export interface GameActions {
   setMaterial(m: MaterialType): void;
   setMirrorX(on: boolean): void;
   setDisaster(d: DisasterType): void;
+  setStrength(s: Strength): void;
+  /** Starts a challenge level, or free build with null. */
+  selectLevel(id: string | null): void;
   loadPreset(p: PresetName): void;
   undo(): void;
   clearIsland(): void;

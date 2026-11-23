@@ -5,7 +5,14 @@
  * Graph changes must go through `commit`-style methods so undo history stays correct.
  */
 import * as THREE from 'three';
-import type { BlueprintGraph, MaterialType, PresetName, ToolType, Vec3 } from '../types/blueprint';
+import type {
+  BlueprintGraph,
+  BuildConstraints,
+  MaterialType,
+  PresetName,
+  ToolType,
+  Vec3,
+} from '../types/blueprint';
 import {
   PRESETS,
   blockId,
@@ -78,6 +85,7 @@ export class BuildController {
   private material: MaterialType = 'wood';
   private mirrorX = false;
   private enabled = true;
+  private constraints: BuildConstraints | null = null;
 
   /** Candidate brace endpoints (ground lattice + block corners), a spatial hash keyed by `key()`. */
   private corners = new Map<string, Vec3>();
@@ -215,6 +223,18 @@ export class BuildController {
   }
   canUndo(): boolean {
     return this.history.length > 0;
+  }
+
+  /**
+   * Limits for challenge levels (max block count, allowed materials). Undefined fields mean no limit;
+   * `null` clears all constraints. CONTRACT STUB: not enforced yet.
+   */
+  setConstraints(c: BuildConstraints | null): void {
+    this.constraints = c;
+  }
+
+  getConstraints(): BuildConstraints | null {
+    return this.constraints;
   }
 
   /** Pointer tools are disabled while a disaster is running. */
