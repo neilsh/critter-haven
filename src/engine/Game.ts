@@ -62,6 +62,7 @@ export class Game implements GameActions, GameDebugApi {
         else if (disaster === 'earthquake') this.audio.playRumble(intensity);
       },
       onWaterLevel: (y) => this.scene.setWaterLevel(y),
+      onHailImpact: (x, y, z) => this.scene.hailImpact(x, y, z),
     });
 
     const best = loadBest(LEVELS);
