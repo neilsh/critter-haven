@@ -255,17 +255,21 @@ export class SceneManager {
     this.effects.dispose();
 
     const textures = new Set<THREE.Texture>();
+    const geometries = new Set<THREE.BufferGeometry>();
+    const materials = new Set<THREE.Material>();
     this.scene.traverse((obj) => {
       if (obj instanceof THREE.Light) obj.dispose(); // frees shadow map render targets
       if (!(obj instanceof THREE.Mesh)) return;
       const mesh: THREE.Mesh = obj;
-      mesh.geometry.dispose();
+      geometries.add(mesh.geometry);
       const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
       for (const m of mats) {
+        materials.add(m);
         for (const v of Object.values(m)) if (v instanceof THREE.Texture) textures.add(v);
-        m.dispose();
       }
     });
+    geometries.forEach((g) => g.dispose());
+    materials.forEach((m) => m.dispose());
     textures.forEach((t) => t.dispose());
 
     this.renderer.dispose();

@@ -218,6 +218,33 @@ describe('BuildController constraints', () => {
     expect(bc.getGraph().blocks).toHaveLength(2);
     expect(bc.placeBlock([2, 0, 0], 'wood')).toBe(false);
   });
+
+  it('colors the block ghost invalid when maxBlocks is reached or material is disallowed', () => {
+    const { bc, fire, screen, scene } = setup();
+    bc.setConstraints({ maxBlocks: 1, materials: ['wood'] });
+    const [sx, sy] = screen([-6, 0, 0]);
+    fire('pointermove', sx, sy);
+    const visibleGhost = () =>
+      scene.scene.children
+        .flatMap((c) => c.children)
+        .find(
+          (o): o is THREE.Mesh =>
+            o instanceof THREE.Mesh && o.visible && o.geometry.type === 'RoundedBoxGeometry',
+        );
+
+    const ghost1 = visibleGhost()!;
+    expect((ghost1.material as THREE.MeshBasicMaterial).color.getHex()).toBe(0x4ade80);
+
+    bc.placeBlock([0, 0, 0], 'wood');
+    fire('pointermove', sx, sy);
+    const ghost2 = visibleGhost()!;
+    expect((ghost2.material as THREE.MeshBasicMaterial).color.getHex()).toBe(0xf87171);
+
+    bc.setConstraints({ maxBlocks: 5, materials: ['stone'] });
+    fire('pointermove', sx, sy);
+    const ghost3 = visibleGhost()!;
+    expect((ghost3.material as THREE.MeshBasicMaterial).color.getHex()).toBe(0xf87171);
+  });
 });
 
 /** Instanced meshes in `root` that draw something. */

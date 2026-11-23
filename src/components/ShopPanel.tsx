@@ -10,13 +10,17 @@ function ShopModal({ actions, onClose }: { actions: GameActions; onClose: () => 
   const closeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
+    actions.setModalOpen(true);
     closeRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      actions.setModalOpen(false);
+    };
+  }, [actions, onClose]);
 
   return (
     <div className="pointer-events-auto fixed inset-0 z-20 flex items-center justify-center bg-sky-950/40 p-3">

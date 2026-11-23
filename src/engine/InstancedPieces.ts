@@ -137,6 +137,24 @@ export class InstancedPieces {
     this.slots.clear();
   }
 
+  /** Rebuilds or drops cached material batches matching `predicate` (e.g. after mod textures refresh). */
+  invalidate(predicate: (type: MaterialType) => boolean): void {
+    for (const [type, batch] of this.batches) {
+      if (!predicate(type)) continue;
+      if (batch.handles.length === 0) {
+        this.root.remove(batch.mesh);
+        batch.material.dispose();
+        batch.mesh.dispose();
+        this.batches.delete(type);
+      } else {
+        const nextMat = patchInstanceEmissive(this.createMaterial(type));
+        batch.material.dispose();
+        batch.material = nextMat;
+        batch.mesh.material = nextMat;
+      }
+    }
+  }
+
   /** The batch for `type`, grown so it has room for one more instance. */
   private reserve(type: MaterialType): Batch {
     let batch = this.batches.get(type);

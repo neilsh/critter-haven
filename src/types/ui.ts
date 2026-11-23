@@ -69,4 +69,5 @@ export interface GameActions {
   setCameraAzimuth(deg: Azimuth): void;
   setFirstPerson(on: boolean): void;
   setMuted(muted: boolean): void;
+  setModalOpen(open: boolean): void;
 }

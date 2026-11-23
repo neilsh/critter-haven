@@ -63,13 +63,17 @@ function LevelSelect({ actions, onClose }: { actions: GameActions; onClose: () =
   const closeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
+    actions.setModalOpen(true);
     closeRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      actions.setModalOpen(false);
+    };
+  }, [actions, onClose]);
 
   const pick = (id: string | null) => {
     actions.selectLevel(id);

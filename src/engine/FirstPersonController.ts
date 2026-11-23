@@ -41,6 +41,7 @@ export class FirstPersonController {
   grounded = true;
 
   private enabled = false;
+  private paused = false;
   private readonly keys = new Set<string>();
   private dragPointerId: number | null = null;
   private lastPointer = { x: 0, y: 0 };
@@ -52,7 +53,7 @@ export class FirstPersonController {
   ) {
     if (typeof window !== 'undefined') {
       const onKeyDown = (e: KeyboardEvent) => {
-        if (!this.enabled || isTextInput(e.target)) return;
+        if (!this.enabled || this.paused || isTextInput(e.target)) return;
         if (
           e.code === 'Space' ||
           e.code === 'ArrowUp' ||
@@ -68,8 +69,7 @@ export class FirstPersonController {
         this.keys.delete(e.code);
       };
       const onBlur = () => {
-        this.keys.clear();
-        this.dragPointerId = null;
+        this.clearInputState();
       };
       window.addEventListener('keydown', onKeyDown);
       window.addEventListener('keyup', onKeyUp);
@@ -83,13 +83,13 @@ export class FirstPersonController {
 
     if (dom && typeof dom.addEventListener === 'function') {
       const onPointerDown = (e: PointerEvent) => {
-        if (!this.enabled || !e.isPrimary || e.button !== 0) return;
+        if (!this.enabled || this.paused || !e.isPrimary || e.button !== 0) return;
         this.dragPointerId = e.pointerId;
         this.lastPointer = { x: e.clientX, y: e.clientY };
         dom.setPointerCapture?.(e.pointerId);
       };
       const onPointerMove = (e: PointerEvent) => {
-        if (!this.enabled || this.dragPointerId !== e.pointerId) return;
+        if (!this.enabled || this.paused || this.dragPointerId !== e.pointerId) return;
         const dx = e.clientX - this.lastPointer.x;
         const dy = e.clientY - this.lastPointer.y;
         this.lastPointer = { x: e.clientX, y: e.clientY };
@@ -97,8 +97,7 @@ export class FirstPersonController {
       };
       const endDrag = (e: PointerEvent) => {
         if (this.dragPointerId !== e.pointerId) return;
-        this.dragPointerId = null;
-        if (dom.hasPointerCapture?.(e.pointerId)) dom.releasePointerCapture(e.pointerId);
+        this.releaseDragCapture();
       };
       dom.addEventListener('pointerdown', onPointerDown);
       dom.addEventListener('pointermove', onPointerMove);
@@ -113,14 +112,32 @@ export class FirstPersonController {
     }
   }
 
+  private releaseDragCapture(): void {
+    const id = this.dragPointerId;
+    this.dragPointerId = null;
+    if (this.dom && id !== null && this.dom.hasPointerCapture?.(id)) {
+      this.dom.releasePointerCapture(id);
+    }
+  }
+
+  private clearInputState(): void {
+    this.keys.clear();
+    this.releaseDragCapture();
+  }
+
   setEnabled(on: boolean): void {
     this.enabled = on;
     if (!on) {
-      this.keys.clear();
-      this.dragPointerId = null;
+      this.clearInputState();
     } else {
       this.syncCamera();
     }
+  }
+
+  /** Pauses keyboard and pointer drag input (e.g. while an overlay modal is open). */
+  setInputPaused(paused: boolean): void {
+    this.paused = paused;
+    if (paused) this.clearInputState();
   }
 
   isEnabled(): boolean {
@@ -269,8 +286,5 @@ export class FirstPersonController {
     this.setEnabled(false);
     for (const off of this.cleanups) off();
     this.cleanups.length = 0;
-    if (this.dom && this.dragPointerId !== null && this.dom.hasPointerCapture?.(this.dragPointerId)) {
-      this.dom.releasePointerCapture(this.dragPointerId);
-    }
   }
 }

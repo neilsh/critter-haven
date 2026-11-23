@@ -64,6 +64,7 @@ export class Game implements GameActions, GameDebugApi {
   /** Incremented on every start/rewind so a slow async start cannot resurrect a cancelled run. */
   private runToken = 0;
   private currentRunDuration = DISASTER_SECONDS;
+  private openModals = 0;
   private cleanups: Array<() => void> = [];
 
   constructor(container: HTMLElement) {
@@ -263,6 +264,7 @@ export class Game implements GameActions, GameDebugApi {
     modStore.setMods(next);
     const { active } = modStore.getState();
     this.assets.setCustomMaterials(active.blockMap);
+    this.build.refreshCustomMaterials();
     const { material, disaster } = uiStore.getState();
     if (!isBuiltinMaterial(material) && !active.blockMap.has(material)) {
       this.build.setMaterial('wood');
@@ -412,6 +414,10 @@ export class Game implements GameActions, GameDebugApi {
   setMuted: GameActions['setMuted'] = (muted) => {
     this.audio.setMuted(muted);
     uiStore.setState({ muted });
+  };
+  setModalOpen: GameActions['setModalOpen'] = (open) => {
+    this.openModals = Math.max(0, this.openModals + (open ? 1 : -1));
+    this.firstPerson.setInputPaused(this.openModals > 0);
   };
 
   // ------------------------------------------------------------ disaster lifecycle (also debug API)

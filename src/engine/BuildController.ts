@@ -26,6 +26,7 @@ import {
   GRID_CELLS,
   ISLAND_SIZE,
   CELL_SIZE,
+  isBuiltinMaterial,
   isStrutValid,
   key,
   mirrorCellX,
@@ -65,6 +66,7 @@ interface PieceInfo {
 }
 
 const sameVec = (a: Vec3, b: Vec3) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
+const isCustomMaterial = (t: MaterialType) => !isBuiltinMaterial(t);
 
 type PointerType = 'pointerdown' | 'pointermove' | 'pointerup' | 'pointerleave' | 'pointercancel';
 
@@ -213,6 +215,10 @@ export class BuildController {
   setMaterial(m: MaterialType): void {
     this.material = m;
     this.updatePreview();
+  }
+  refreshCustomMaterials(): void {
+    this.blockBatches.invalidate(isCustomMaterial);
+    this.strutBatches.invalidate(isCustomMaterial);
   }
   setMirrorX(on: boolean): void {
     this.mirrorX = on;
@@ -713,7 +719,11 @@ export class BuildController {
       if (this.mirrorX && !sameVec(mirrorCellX(cell), cell)) cells.push(mirrorCellX(cell));
       cells.forEach((c, i) => {
         const ghost = this.blockGhosts[i];
-        const valid = cellInBounds(c) && !this.graph.blocks.some((b) => sameVec(b.cell, c));
+        const valid =
+          cellInBounds(c) &&
+          !this.graph.blocks.some((b) => sameVec(b.cell, c)) &&
+          isMaterialAllowed(this.constraints, this.material) &&
+          canAddBlock(this.constraints, this.graph.blocks.length + i);
         ghost.material = this.ghostMat(valid);
         ghost.position.set(...cellToWorld(c));
         ghost.visible = true;
@@ -732,7 +742,9 @@ export class BuildController {
           if (sameVec(a, b)) return;
           const ghost = this.strutGhosts[i];
           const valid =
-            isStrutValid(this.graph, a, b) && !this.graph.struts.some((s) => s.id === strutId(a, b));
+            isStrutValid(this.graph, a, b) &&
+            !this.graph.struts.some((s) => s.id === strutId(a, b)) &&
+            isMaterialAllowed(this.constraints, this.material);
           ghost.material = this.ghostMat(valid);
           this.orientStrut(
             ghost,

@@ -56,4 +56,46 @@ describe('InstancedPieces', () => {
     expect(shader.fragmentShader).not.toContain('#include <color_fragment>');
     expect(shader.fragmentShader).toContain('totalEmissiveRadiance += vColor.rgb;');
   });
+
+  it('invalidates matching batches by recreating active materials and dropping empty ones', () => {
+    const root = new THREE.Group();
+    const created: THREE.MeshStandardMaterial[] = [];
+    const pieces = new InstancedPieces(root, new THREE.BoxGeometry(), () => {
+      const mat = new THREE.MeshStandardMaterial();
+      created.push(mat);
+      return mat;
+    });
+    const customHandle = new PieceHandle();
+    const emptyCustomHandle = new PieceHandle();
+    const builtinHandle = new PieceHandle();
+    pieces.add(customHandle, 'mod:active');
+    pieces.add(emptyCustomHandle, 'mod:empty');
+    pieces.add(builtinHandle, 'wood');
+    pieces.remove(emptyCustomHandle);
+
+    const [activeMat, emptyMat, builtinMat] = created;
+    let activeDisposed = 0;
+    let emptyDisposed = 0;
+    let builtinDisposed = 0;
+    activeMat.dispose = () => {
+      activeDisposed++;
+    };
+    emptyMat.dispose = () => {
+      emptyDisposed++;
+    };
+    builtinMat.dispose = () => {
+      builtinDisposed++;
+    };
+
+    pieces.invalidate((t) => t.startsWith('mod:'));
+
+    expect(activeDisposed).toBe(1);
+    expect(emptyDisposed).toBe(1);
+    expect(builtinDisposed).toBe(0);
+    expect(created).toHaveLength(4);
+    expect(pieces.meshes().map((m) => m.name)).toEqual(['pieces:mod:active', 'pieces:wood']);
+    const activeMesh = pieces.meshes().find((m) => m.name === 'pieces:mod:active')!;
+    expect(activeMesh.material).toBe(created[3]);
+    pieces.dispose();
+  });
 });

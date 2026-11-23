@@ -510,13 +510,17 @@ function ModsModal({ actions, onClose }: { actions: GameActions; onClose: () => 
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    actions.setModalOpen(true);
     closeRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      actions.setModalOpen(false);
+    };
+  }, [actions, onClose]);
 
   const handleImportText = (raw: string) => {
     const res = actions.importMod(raw);
@@ -619,8 +623,12 @@ function ModsModal({ actions, onClose }: { actions: GameActions; onClose: () => 
                     accept=".json,application/json"
                     onChange={(e) => {
                       const file = e.target.files?.[0];
+                      e.target.value = '';
                       if (!file) return;
-                      void file.text().then((txt) => handleImportText(txt));
+                      void file
+                        .text()
+                        .then((txt) => handleImportText(txt))
+                        .catch(() => setImportFeedback('Could not read that file.'));
                     }}
                     className="text-xs font-semibold"
                   />
