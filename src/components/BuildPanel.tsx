@@ -5,6 +5,7 @@ import {
   Eraser,
   FlipHorizontal2,
   House,
+  Lock,
   Paintbrush,
   Square,
   Trash2,
@@ -13,11 +14,13 @@ import {
 } from 'lucide-react';
 import { isMaterialAllowed } from '../levels/constraints';
 import { getLevel } from '../levels/levels';
+import { useMods } from '../mods/modStore';
 import { useUIState } from '../state/store';
 import {
+  BASE_MATERIALS,
   MATERIALS,
-  MATERIAL_ORDER,
-  type MaterialType,
+  UNLOCKABLE_MATERIALS,
+  type BuiltinMaterialType,
   type PresetName,
   type ToolType,
 } from '../types/blueprint';
@@ -40,6 +43,7 @@ const PRESETS: Array<{ id: PresetName; label: string; icon: ReactNode }> = [
 /** Build tools, materials, mirror/undo/clear and starter presets. Reads the UI store only. */
 export function BuildPanel({ actions }: { actions: GameActions }) {
   const s = useUIState();
+  const { active } = useMods();
   // A challenge level greys out materials it does not allow and the presets (they would skip its limits).
   const level = s.levelId ? getLevel(s.levelId) : undefined;
   return (
@@ -81,7 +85,7 @@ export function BuildPanel({ actions }: { actions: GameActions }) {
       </div>
 
       <div className="flex flex-wrap gap-2" role="group" aria-label="Materials">
-        {MATERIAL_ORDER.map((m: MaterialType) => (
+        {BASE_MATERIALS.map((m: BuiltinMaterialType) => (
           <Chip
             key={m}
             testId={`material-${m}`}
@@ -93,6 +97,39 @@ export function BuildPanel({ actions }: { actions: GameActions }) {
           />
         ))}
       </div>
+
+      <div className="flex flex-wrap gap-2" role="group" aria-label="Tech blocks">
+        {UNLOCKABLE_MATERIALS.map((m: BuiltinMaterialType) => {
+          const unlocked = s.unlockedMaterials.includes(m);
+          const allowed = isMaterialAllowed(level?.constraints, m);
+          return (
+            <Chip
+              key={m}
+              testId={`material-${m}`}
+              label={MATERIALS[m].label}
+              icon={unlocked ? <Swatch color={MATERIALS[m].color} /> : <Lock size={20} />}
+              active={s.material === m}
+              disabled={!unlocked || !allowed}
+              onClick={() => actions.setMaterial(m)}
+            />
+          );
+        })}
+      </div>
+
+      {level === undefined && active.blocks.length > 0 && (
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Mod blocks">
+          {active.blocks.map((b) => (
+            <Chip
+              key={b.id}
+              testId={`material-${b.id}`}
+              label={b.label}
+              icon={<Swatch color={b.color} />}
+              active={s.material === b.id}
+              onClick={() => actions.setMaterial(b.id)}
+            />
+          ))}
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-2" role="group" aria-label="Starter shapes">
         {PRESETS.map((p) => (

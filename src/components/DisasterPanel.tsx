@@ -1,11 +1,24 @@
-import { Activity, CloudHail, Play, RotateCcw, Waves, Wind } from 'lucide-react';
+import {
+  Activity,
+  CloudHail,
+  Flame,
+  Orbit,
+  Play,
+  RotateCcw,
+  Snowflake,
+  Sparkles,
+  Swords,
+  Waves,
+  Wind,
+} from 'lucide-react';
 import type { ReactNode } from 'react';
+import { useMods } from '../mods/modStore';
 import { useUIState } from '../state/store';
 import {
   DISASTER_ORDER,
   DISASTER_SECONDS,
   STRENGTH_ORDER,
-  type DisasterType,
+  type BuiltinDisasterType,
   type Strength,
 } from '../types/blueprint';
 import type { GameActions } from '../types/ui';
@@ -13,22 +26,28 @@ import { Chip } from './Chip';
 
 const STRENGTHS: Record<Strength, string> = { gentle: 'Gentle', medium: 'Medium', strong: 'Strong' };
 
-const DISASTERS: Record<DisasterType, { label: string; icon: ReactNode }> = {
+const DISASTERS: Record<BuiltinDisasterType, { label: string; icon: ReactNode }> = {
   earthquake: { label: 'Quake', icon: <Activity size={22} /> },
   hurricane: { label: 'Wind', icon: <Wind size={22} /> },
   flood: { label: 'Flood', icon: <Waves size={22} /> },
   hail: { label: 'Hail', icon: <CloudHail size={22} /> },
+  fire_tornado: { label: 'Fire', icon: <Flame size={22} /> },
+  snow_storm: { label: 'Snow', icon: <Snowflake size={22} /> },
+  raid: { label: 'Raid', icon: <Swords size={22} /> },
+  meteor: { label: 'Meteor', icon: <Orbit size={22} /> },
 };
 
 /** Disaster picker, the Test/Rewind button and the countdown. */
 export function DisasterPanel({ actions }: { actions: GameActions }) {
   const s = useUIState();
+  const { active } = useMods();
   const building = s.mode === 'build';
   // A challenge level fixes its own disaster and strength.
   const canPick = building && s.levelId === null;
+  const idleSeconds = s.levelId === null ? active.durationSeconds : DISASTER_SECONDS;
   // Idle shows the full countdown; a finished run shows 0 instead of jumping back to 8.
   const seconds = building
-    ? DISASTER_SECONDS
+    ? idleSeconds
     : s.mode === 'simulating'
       ? Math.max(0, Math.ceil(s.timeRemaining))
       : 0;
@@ -36,7 +55,7 @@ export function DisasterPanel({ actions }: { actions: GameActions }) {
   return (
     <section
       aria-label="Disasters"
-      className="pointer-events-auto flex w-full max-w-2xl flex-wrap items-center justify-center gap-2 rounded-3xl bg-white/85 p-2.5 shadow-xl backdrop-blur"
+      className="pointer-events-auto flex w-full max-w-4xl flex-wrap items-center justify-center gap-2 rounded-3xl bg-white/85 p-2.5 shadow-xl backdrop-blur"
     >
       <div className="flex flex-wrap justify-center gap-2" role="group" aria-label="Pick a disaster">
         {DISASTER_ORDER.map((d) => (
@@ -50,6 +69,18 @@ export function DisasterPanel({ actions }: { actions: GameActions }) {
             onClick={() => actions.setDisaster(d)}
           />
         ))}
+        {s.levelId === null &&
+          active.disasters.map((d) => (
+            <Chip
+              key={d.id}
+              testId={`disaster-${d.id}`}
+              label={d.label}
+              icon={<Sparkles size={22} style={{ color: `#${d.color.toString(16).padStart(6, '0')}` }} />}
+              active={s.disaster === d.id}
+              disabled={!canPick}
+              onClick={() => actions.setDisaster(d.id)}
+            />
+          ))}
       </div>
 
       <div className="flex gap-2" role="group" aria-label="Pick a strength">

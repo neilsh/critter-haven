@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { goalLines } from '../components/LevelPanel';
-import { cellInBounds } from '../types/blueprint';
+import { DISASTER_ORDER, cellInBounds } from '../types/blueprint';
 import { buildHeight, canAddBlock, isMaterialAllowed } from './constraints';
 import { LEVELS, getLevel } from './levels';
 
@@ -19,9 +19,7 @@ describe('LEVELS', () => {
 
   it('ramps up: starts gentle and covers every disaster and strength', () => {
     expect(LEVELS[0]?.strength).toBe('gentle');
-    expect(new Set(LEVELS.map((l) => l.disaster))).toEqual(
-      new Set(['earthquake', 'hurricane', 'flood', 'hail']),
-    );
+    expect(new Set(LEVELS.map((l) => l.disaster))).toEqual(new Set(DISASTER_ORDER));
     expect(new Set(LEVELS.map((l) => l.strength))).toEqual(new Set(['gentle', 'medium', 'strong']));
   });
 

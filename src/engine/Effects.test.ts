@@ -72,4 +72,23 @@ describe('DisasterEffects', () => {
     fx.update(1 / 60);
     expect(visible()).toBe(4);
   });
+
+  it('renders particles for the new disasters and flashes laser beams cleanly', () => {
+    const { fx, sky, visible, run } = setup();
+    const bg = sky.background.clone();
+    for (const d of ['fire_tornado', 'snow_storm', 'raid', 'meteor'] as const) {
+      run(d, 0.8);
+      expect(visible()).toBeGreaterThan(0);
+      expect(sky.background.equals(bg)).toBe(false);
+      fx.setDisaster(d, 0);
+      fx.update(1 / 60);
+      expect(visible()).toBe(0);
+    }
+    fx.laserBeam([0, 2, 0], [3, 8, 2]);
+    fx.update(1 / 60);
+    expect(visible()).toBeGreaterThan(0);
+    fx.reset();
+    fx.update(1 / 60);
+    expect(visible()).toBe(0);
+  });
 });

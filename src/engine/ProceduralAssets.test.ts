@@ -52,6 +52,10 @@ describe('ProceduralAssets (headless)', () => {
     audio.playWind(0.5);
     audio.playRumble(2);
     audio.playVictory();
+    audio.playLaserZap();
+    audio.playUnlock();
+    audio.playHit();
+    audio.playKO();
     audio.setMuted(true);
     expect(audio.isMuted()).toBe(true);
     audio.dispose();

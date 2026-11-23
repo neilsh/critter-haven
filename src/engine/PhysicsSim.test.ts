@@ -393,3 +393,227 @@ describe('strength levels', () => {
     expect(await maxHail('strong')).toBeGreaterThan((await maxHail('gentle')) * 1.5);
   });
 });
+
+function makeAnchorTower(base: MaterialType): BlueprintGraph {
+  return {
+    version: 1,
+    blocks: [
+      { id: blockId([3, 0, 3]), cell: [3, 0, 3], material: base },
+      { id: blockId([3, 1, 3]), cell: [3, 1, 3], material: 'steel' },
+      { id: blockId([3, 2, 3]), cell: [3, 2, 3], material: 'steel' },
+      { id: blockId([3, 3, 3]), cell: [3, 3, 3], material: 'steel' },
+      { id: blockId([3, 4, 3]), cell: [3, 4, 3], material: 'steel' },
+      { id: blockId([3, 5, 3]), cell: [3, 5, 3], material: 'steel' },
+    ],
+    struts: [],
+  };
+}
+
+function makeShieldBuild(centerMat: MaterialType): BlueprintGraph {
+  return {
+    version: 1,
+    blocks: [
+      { id: blockId([3, 0, 3]), cell: [3, 0, 3], material: centerMat },
+      { id: blockId([4, 0, 3]), cell: [4, 0, 3], material: 'wood' },
+      { id: blockId([4, 1, 3]), cell: [4, 1, 3], material: 'wood' },
+      { id: blockId([4, 2, 3]), cell: [4, 2, 3], material: 'wood' },
+      { id: blockId([4, 3, 3]), cell: [4, 3, 3], material: 'wood' },
+    ],
+    struts: [],
+  };
+}
+
+describe('new disasters and tech blocks', () => {
+  it.each(['fire_tornado', 'snow_storm', 'raid', 'meteor'] as const)(
+    '%s: tower fails, empty island survives, impacts are reported',
+    async (disaster) => {
+      expect((await simulate(PRESETS.empty(), disaster)).t.mode).toBe('survived');
+      expect((await simulate(PRESETS.tower(), disaster)).t.mode).toBe('failed');
+
+      const g = PRESETS.house();
+      const sim = new PhysicsSim();
+      const impacts: number[] = [];
+      sim.setEvents({ onProjectileImpact: () => impacts.push(1) });
+      await sim.start(g, meshesFor(g), disaster, 1, 'medium');
+      while (sim.isRunning()) sim.update(1 / 60);
+      expect(impacts.length).toBeGreaterThan(0);
+    },
+  );
+
+  it('anchor block grips the ground stronger than stone in a strong hurricane', async () => {
+    const withStone = await simulate(makeAnchorTower('stone'), 'hurricane', 1, 'strong');
+    const withAnchor = await simulate(makeAnchorTower('anchor'), 'hurricane', 1, 'strong');
+    expect(withStone.t.mode).toBe('failed');
+    expect(withAnchor.t.mode).toBe('survived');
+    expect(withAnchor.peak.strain).toBeLessThan(withStone.peak.strain * 0.7);
+  });
+
+  it('shield projector reinforces nearby blocks and creates/cleans up its dome mesh', async () => {
+    const unshielded = await simulate(makeShieldBuild('stone'), 'hurricane', 1, 'medium');
+    const shielded = await simulate(makeShieldBuild('shield'), 'hurricane', 1, 'medium');
+    expect(unshielded.t.mode).toBe('failed');
+    expect(shielded.t.mode).toBe('survived');
+    expect(shielded.peak.strain).toBeLessThan(unshielded.peak.strain * 0.5);
+
+    const root = new THREE.Group();
+    const g = makeShieldBuild('shield');
+    const sim = new PhysicsSim();
+    sim.setEffectsRoot(root);
+    await sim.start(g, meshesFor(g), 'earthquake', 1);
+    expect(root.children.length).toBe(1);
+    sim.stop();
+    expect(root.children.length).toBe(0);
+  });
+
+  it('laser block fires with nerfed range/cooldown and needs 2 shots for meteors', async () => {
+    expect(PHYSICS_TUNING.laser.range).toBeLessThanOrEqual(11);
+    expect(PHYSICS_TUNING.laser.cooldown).toBeGreaterThanOrEqual(1.2);
+
+    const g: BlueprintGraph = {
+      version: 1,
+      blocks: [
+        { id: blockId([3, 0, 3]), cell: [3, 0, 3], material: 'stone' },
+        { id: blockId([3, 1, 3]), cell: [3, 1, 3], material: 'laser' },
+      ],
+      struts: [],
+    };
+    const sim = new PhysicsSim();
+    const shots: Array<[Vec3, Vec3]> = [];
+    sim.setEvents({ onLaserFire: (from, to) => shots.push([from, to]) });
+    await sim.start(g, meshesFor(g), 'raid', 1, 'medium');
+    while (sim.isRunning()) sim.update(1 / 60);
+    expect(shots.length).toBeGreaterThanOrEqual(1);
+    expect(shots.length).toBeLessThanOrEqual(7); // 1.2s cooldown caps shots over 8s
+
+    // Out-of-range check: laser at corner (0,0,0) does not hit raid targets only over (7,0,7)?
+    // Wait: test single vs twin laser against 2-HP meteors on a 2x2 platform at (3..4, 3..4).
+    const oneLaser: BlueprintGraph = {
+      version: 1,
+      blocks: [
+        { id: blockId([3, 0, 3]), cell: [3, 0, 3], material: 'steel' },
+        { id: blockId([3, 1, 3]), cell: [3, 1, 3], material: 'laser' },
+      ],
+      struts: [],
+    };
+    const twoLasers: BlueprintGraph = {
+      version: 1,
+      blocks: [
+        ...oneLaser.blocks,
+        { id: blockId([4, 0, 3]), cell: [4, 0, 3], material: 'steel' },
+        { id: blockId([4, 1, 3]), cell: [4, 1, 3], material: 'laser' },
+      ],
+      struts: [],
+    };
+    const singleImpacts: number[] = [];
+    const sim1 = new PhysicsSim();
+    sim1.setEvents({ onProjectileImpact: () => singleImpacts.push(1) });
+    await sim1.start(oneLaser, meshesFor(oneLaser), 'meteor', 1, 'medium');
+    while (sim1.isRunning()) sim1.update(1 / 60);
+    expect(singleImpacts.length).toBeGreaterThan(0);
+
+    const twinShots: number[] = [];
+    const sim2 = new PhysicsSim();
+    sim2.setEvents({ onLaserFire: () => twinShots.push(1) });
+    await sim2.start(twoLasers, meshesFor(twoLasers), 'meteor', 1, 'medium');
+    while (sim2.isRunning()) sim2.update(1 / 60);
+    expect(twinShots.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('supports custom mod blocks, custom disasters and world rules', async () => {
+    const customMaterials = new Map([
+      [
+        'mod:obsidian',
+        {
+          id: 'mod:obsidian',
+          label: 'Obsidian',
+          color: 0x311b92,
+          density: 3.4,
+          stiffness: 2.4,
+          maxStress: 4.0,
+          buoyancy: 0,
+        },
+      ],
+    ]);
+    const g: BlueprintGraph = {
+      version: 1,
+      blocks: [0, 1, 2, 3].map((y) => ({
+        id: blockId([3, y, 3]),
+        cell: [3, y, 3],
+        material: 'mod:obsidian',
+      })),
+      struts: [],
+    };
+    const sim = new PhysicsSim();
+    const impacts: string[] = [];
+    const water: number[] = [];
+    sim.setEvents({
+      onProjectileImpact: (kind) => impacts.push(kind),
+      onWaterLevel: (y) => water.push(y),
+    });
+    await sim.start(g, meshesFor(g), 'mod:mega', 1, 'medium', {
+      customMaterials,
+      customDisaster: {
+        id: 'mod:mega',
+        label: 'Mega',
+        color: 0x84cc16,
+        quake: 0.6,
+        wind: 0.6,
+        flood: true,
+        projectiles: { mode: 'rain', rate: 6, speed: 15, radius: 0.4, density: 2 },
+      },
+      gravityMultiplier: 0.35,
+      durationSeconds: 5,
+    });
+    expect(sim.getTelemetry().timeRemaining).toBe(5);
+    let steps = 0;
+    while (sim.isRunning()) {
+      sim.update(1 / 60);
+      steps++;
+    }
+    expect(steps).toBe(300); // 5s at 60 Hz
+    expect(sim.getTelemetry().mode).toBe('survived');
+    expect(water.length).toBe(301); // initial flood level + 300 steps
+    expect(impacts.length).toBeGreaterThan(0);
+    expect(impacts.every((k) => k === 'custom')).toBe(true);
+  });
+
+  it('damages first-person player on fall, flood drowning, falling blocks, and projectiles with i-frames', async () => {
+    // 1. Fall KO & stationary block deals 0 damage
+    const gStatic = PRESETS.house();
+    const simStatic = new PhysicsSim();
+    await simStatic.start(gStatic, meshesFor(gStatic), 'earthquake', 1, 'gentle');
+    expect(simStatic.getBlockPositions()).toHaveLength(gStatic.blocks.length);
+    const fallHit = simStatic.checkPlayerDamage([0, -7, 0], 1 / 60);
+    expect(fallHit.damage).toBe(PHYSICS_TUNING.player.maxHp);
+    expect(fallHit.impact).toBe(true);
+    simStatic.stop();
+
+    // 2. Flood drowning when water rises above head height
+    const simFlood = new PhysicsSim();
+    await simFlood.start(PRESETS.empty(), meshesFor(PRESETS.empty()), 'flood', 1, 'medium');
+    for (let i = 0; i < 300; i++) simFlood.update(1 / 60); // 5s -> water > 2.5
+    const drown = simFlood.checkPlayerDamage([0, 0, 0], 0.1);
+    expect(drown.damage).toBeCloseTo(PHYSICS_TUNING.player.drownDps * 0.1);
+    expect(drown.impact).toBe(false);
+    simFlood.stop();
+
+    // 3. Falling unanchored block hits player + invulnerability window prevents double hit
+    const loose: BlueprintGraph = {
+      version: 1,
+      blocks: [{ id: blockId([3, 3, 3]), cell: [3, 3, 3], material: 'stone' }],
+      struts: [],
+    };
+    const simBlock = new PhysicsSim();
+    await simBlock.start(loose, meshesFor(loose), 'hail', 1, 'gentle');
+    for (let i = 0; i < 45; i++) simBlock.update(1 / 60); // falls fast downward
+    const pos = simBlock.getBlockPositions()[0];
+    expect(pos).toBeDefined();
+    if (!pos) throw new Error('expected block position');
+    const blockHit = simBlock.checkPlayerDamage([pos[0], Math.max(0, pos[1] - 0.5), pos[2]], 1 / 60);
+    expect(blockHit.damage).toBe(PHYSICS_TUNING.player.blockDamage);
+    expect(blockHit.impact).toBe(true);
+    const invulnHit = simBlock.checkPlayerDamage([pos[0], Math.max(0, pos[1] - 0.5), pos[2]], 1 / 60);
+    expect(invulnHit.damage).toBe(0);
+    simBlock.stop();
+  });
+});

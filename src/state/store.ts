@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import { DEFAULT_STRENGTH, DISASTER_SECONDS } from '../types/blueprint';
+import { BASE_MATERIALS, DEFAULT_STRENGTH, DISASTER_SECONDS } from '../types/blueprint';
 import type { UIState } from '../types/ui';
 
 type Listener = () => void;
@@ -19,10 +19,16 @@ class UIStore {
     standingHistory: [],
     levelId: null,
     unlocked: [],
+    points: 0,
+    unlockedMaterials: [...BASE_MATERIALS],
     firstBrokenId: null,
     muted: false,
     canUndo: false,
     azimuth: 0,
+    firstPerson: false,
+    playerHp: 100,
+    playerMaxHp: 100,
+    damageFlash: 0,
   };
   private listeners = new Set<Listener>();
 

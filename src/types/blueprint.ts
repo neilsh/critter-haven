@@ -12,8 +12,29 @@
 
 export type Vec3 = [number, number, number];
 
-export type MaterialType = 'wood' | 'stone' | 'bamboo' | 'foam';
-export type DisasterType = 'earthquake' | 'hurricane' | 'flood' | 'hail';
+export type BuiltinMaterialType =
+  | 'wood'
+  | 'stone'
+  | 'bamboo'
+  | 'foam'
+  | 'anchor'
+  | 'steel'
+  | 'shield'
+  | 'laser';
+export type MaterialType = BuiltinMaterialType | (string & {});
+
+export type BuiltinDisasterType =
+  | 'earthquake'
+  | 'hurricane'
+  | 'flood'
+  | 'hail'
+  | 'fire_tornado'
+  | 'snow_storm'
+  | 'raid'
+  | 'meteor';
+export type DisasterType = BuiltinDisasterType | (string & {});
+
+export type ProjectileKind = 'hail' | 'fireball' | 'snowball' | 'raider' | 'meteor' | 'custom';
 export type ToolType = 'block' | 'brace' | 'paint' | 'erase';
 /** Camera azimuth presets in degrees: 0 = front (looking toward -z), 90 = right, 180 = back, 270 = left. */
 export type Azimuth = 0 | 90 | 180 | 270;
@@ -42,9 +63,17 @@ export interface MaterialDef {
   maxStress: number;
   /** 0 = sinks, 1 = neutrally buoyant, >1 floats. */
   buoyancy: number;
+  /** Point cost in the unlock shop; omitted means unlocked from the start. */
+  cost?: number;
+  /** Short kid-friendly shop description. */
+  description?: string;
+  /** Multiplier applied to foundation anchor break limits for ground blocks. */
+  anchorMultiplier?: number;
+  /** Active defense behaviour during a disaster. */
+  special?: 'shield' | 'laser';
 }
 
-export const MATERIALS: Record<MaterialType, MaterialDef> = {
+export const MATERIALS: Record<BuiltinMaterialType, MaterialDef> = {
   wood: {
     id: 'wood',
     label: 'Wood',
@@ -81,10 +110,84 @@ export const MATERIALS: Record<MaterialType, MaterialDef> = {
     maxStress: 0.5,
     buoyancy: 3.0,
   },
+  anchor: {
+    id: 'anchor',
+    label: 'Anchor',
+    color: 0x455a64,
+    density: 2.8,
+    stiffness: 2.0,
+    maxStress: 2.6,
+    buoyancy: 0.0,
+    anchorMultiplier: 3.0,
+    cost: 150,
+    description: 'Magnetic base that grips the island 3x tighter.',
+  },
+  steel: {
+    id: 'steel',
+    label: 'Steel',
+    color: 0x607d8b,
+    density: 2.6,
+    stiffness: 2.0,
+    maxStress: 2.6,
+    buoyancy: 0.0,
+    cost: 250,
+    description: 'Ultra-tough metal for heavy frames and braces.',
+  },
+  shield: {
+    id: 'shield',
+    label: 'Shield',
+    color: 0x29b6f6,
+    density: 1.4,
+    stiffness: 1.3,
+    maxStress: 1.5,
+    buoyancy: 0.2,
+    special: 'shield',
+    cost: 350,
+    description: 'Projects a glowing aura that reinforces nearby blocks.',
+  },
+  laser: {
+    id: 'laser',
+    label: 'Laser',
+    color: 0xef5350,
+    density: 1.4,
+    stiffness: 1.3,
+    maxStress: 1.4,
+    buoyancy: 0.2,
+    special: 'laser',
+    cost: 500,
+    description: 'Zaps incoming fireballs, snow, hail, raiders, and meteors.',
+  },
 };
 
-export const MATERIAL_ORDER: MaterialType[] = ['wood', 'stone', 'bamboo', 'foam'];
-export const DISASTER_ORDER: DisasterType[] = ['earthquake', 'hurricane', 'flood', 'hail'];
+export const BASE_MATERIALS: BuiltinMaterialType[] = ['wood', 'stone', 'bamboo', 'foam'];
+export const UNLOCKABLE_MATERIALS: BuiltinMaterialType[] = ['anchor', 'steel', 'shield', 'laser'];
+export const MATERIAL_ORDER: BuiltinMaterialType[] = [...BASE_MATERIALS, ...UNLOCKABLE_MATERIALS];
+export const DISASTER_ORDER: BuiltinDisasterType[] = [
+  'earthquake',
+  'hurricane',
+  'flood',
+  'hail',
+  'fire_tornado',
+  'snow_storm',
+  'raid',
+  'meteor',
+];
+
+const BUILTIN_MATERIAL_SET = new Set<string>(MATERIAL_ORDER);
+const BUILTIN_DISASTER_SET = new Set<string>(DISASTER_ORDER);
+
+export function isBuiltinMaterial(m: string): m is BuiltinMaterialType {
+  return BUILTIN_MATERIAL_SET.has(m);
+}
+
+export function isBuiltinDisaster(d: string): d is BuiltinDisasterType {
+  return BUILTIN_DISASTER_SET.has(d);
+}
+
+export function getMaterialDef(m: MaterialType, custom?: ReadonlyMap<string, MaterialDef>): MaterialDef {
+  if (isBuiltinMaterial(m)) return MATERIALS[m];
+  return custom?.get(m) ?? MATERIALS.wood;
+}
 
 export interface BlockData {
   /** Deterministic id: `b:cx,cy,cz` (see `blockId`). */

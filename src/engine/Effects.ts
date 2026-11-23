@@ -8,8 +8,14 @@
  * `prefers-reduced-motion` turns the shake off and halves the particle rates.
  */
 import * as THREE from 'three';
-import type { DisasterType } from '../types/blueprint';
-import { ISLAND_SIZE } from '../types/blueprint';
+import type { BuiltinDisasterType, DisasterType, ProjectileKind, Vec3 } from '../types/blueprint';
+import { ISLAND_SIZE, isBuiltinDisaster } from '../types/blueprint';
+
+export interface CustomDisasterFx {
+  color: number;
+  quake?: boolean;
+  wind?: boolean;
+}
 
 /** If setDisasterFx is not called for this long, the disaster is treated as over. */
 const STALE_SECONDS = 0.3;
@@ -18,6 +24,28 @@ const SHAKE_MAX = 0.32;
 const SHAKE_FREQ = 26;
 /** Half-width of the island's rock slab; flood water below the top (y 0) is hidden inside it. */
 const SLAB_HALF = HALF + 1.5;
+const LASER_POOL = 8;
+const LASER_LIFE = 0.18;
+const UP_AXIS = new THREE.Vector3(0, 1, 0);
+
+const SKY_TINTS: Partial<Record<BuiltinDisasterType, string>> = {
+  hurricane: '#7f98ad',
+  hail: '#a3b4c4',
+  flood: '#8fb3cc',
+  fire_tornado: '#d97742',
+  snow_storm: '#dcebf7',
+  raid: '#8f8aa3',
+  meteor: '#6d597a',
+};
+
+const IMPACT_COLORS: Record<ProjectileKind, [string, string]> = {
+  hail: ['#f4fbff', '#dff3ff'],
+  snowball: ['#ffffff', '#e0f2fe'],
+  fireball: ['#ff6a00', '#ffd54f'],
+  raider: ['#90a4ae', '#ffab40'],
+  meteor: ['#ff5722', '#ffd740'],
+  custom: ['#a3e635', '#fef08a'],
+};
 
 const scratchM = new THREE.Matrix4();
 const scratchQ = new THREE.Quaternion();
@@ -180,9 +208,14 @@ export class DisasterEffects {
   private readonly splashes: ParticlePool;
   private readonly puffs: ParticlePool;
   private readonly pools: ParticlePool[];
+  private readonly laserGeom = new THREE.CylinderGeometry(0.09, 0.09, 1, 8);
+  private readonly laserMat = new THREE.MeshBasicMaterial({ color: '#ff4d6d' });
+  private readonly beams: Array<{ mesh: THREE.Mesh; len: number; life: number }> = [];
+  private beamCursor = 0;
   private readonly reduced: boolean;
 
   private disaster: DisasterType | null = null;
+  private customFx: CustomDisasterFx | null = null;
   private target = 0;
   private level = 0;
   private sinceCall = 0;
@@ -227,6 +260,13 @@ export class DisasterEffects {
     });
     this.pools = [this.dust, this.leaves, this.streaks, this.splashes, this.puffs];
     for (const p of this.pools) parent.add(p.mesh);
+    for (let i = 0; i < LASER_POOL; i++) {
+      const mesh = new THREE.Mesh(this.laserGeom, this.laserMat);
+      mesh.visible = false;
+      mesh.frustumCulled = false;
+      parent.add(mesh);
+      this.beams.push({ mesh, len: 1, life: 0 });
+    }
     this.baseBackground = skyColors.background.clone();
     this.baseFog = skyColors.fog.color.clone();
   }
@@ -235,12 +275,13 @@ export class DisasterEffects {
   private readonly baseFog: THREE.Color;
 
   /** Called by the physics every step; the intensity is 0..1. 0 (run ended or rewound) clears all. */
-  setDisaster(disaster: DisasterType, intensity: number): void {
+  setDisaster(disaster: DisasterType, intensity: number, customMeta?: CustomDisasterFx): void {
     if (intensity <= 0) {
       this.reset();
       return;
     }
     this.disaster = disaster;
+    this.customFx = customMeta ?? null;
     this.target = Math.min(1, Math.max(0, intensity));
     this.sinceCall = 0;
   }
@@ -260,22 +301,41 @@ export class DisasterEffects {
     const k = this.reduced ? 0.5 : 1;
     const lv = this.level;
     if (this.disaster && lv > 0) {
-      switch (this.disaster) {
-        case 'earthquake':
-          this.spawnDust(dt, lv, k);
-          break;
-        case 'hurricane':
-          this.spawnWind(dt, lv, k);
-          break;
-        case 'flood':
-          this.spawnSplashes(dt, lv, k);
-          break;
-        case 'hail':
-          // Puffs come from hailImpact, at the spots where stones actually land.
-          break;
+      if (isBuiltinDisaster(this.disaster)) {
+        switch (this.disaster) {
+          case 'earthquake':
+            this.spawnDust(dt, lv, k);
+            break;
+          case 'hurricane':
+            this.spawnWind(dt, lv, k);
+            break;
+          case 'flood':
+            this.spawnSplashes(dt, lv, k);
+            break;
+          case 'hail':
+            // Puffs come from hailImpact, at the spots where stones actually land.
+            break;
+          case 'fire_tornado':
+            this.spawnFireTornado(dt, lv, k);
+            break;
+          case 'snow_storm':
+            this.spawnSnowStorm(dt, lv, k);
+            break;
+          case 'raid':
+            this.spawnRaid(dt, lv, k);
+            break;
+          case 'meteor':
+            this.spawnMeteor(dt, lv, k);
+            break;
+        }
+      } else if (this.customFx) {
+        if (this.customFx.quake) this.spawnDust(dt, lv, k);
+        if (this.customFx.wind) this.spawnWind(dt, lv, k);
+        this.spawnCustomMotes(dt, lv, k, this.customFx.color);
       }
     }
     for (const p of this.pools) p.update(dt);
+    this.updateBeams(dt);
     this.updateShake(lv);
     this.updateSky(lv);
   }
@@ -285,14 +345,29 @@ export class DisasterEffects {
     this.target = 0;
     this.level = 0;
     this.disaster = null;
+    this.customFx = null;
     this.shakeOffset.set(0, 0, 0);
     for (const p of this.pools) p.clear();
+    for (const b of this.beams) {
+      b.life = 0;
+      b.mesh.visible = false;
+    }
     this.updateSky(0);
   }
 
   /** A hail stone landed at this world point: pop a small icy puff with a few bouncing bits. */
   hailImpact(x: number, y: number, z: number): void {
-    if (this.disaster !== 'hail' || this.level <= 0) return;
+    if (this.disaster !== 'hail') return;
+    this.projectileImpact('hail', x, y, z);
+  }
+
+  /** A disaster projectile hit the ground or a building: pop a themed puff and bouncing bits. */
+  projectileImpact(kind: ProjectileKind, x: number, y: number, z: number): void {
+    if (!this.disaster || this.level <= 0) return;
+    const [mainColor, bitColor] =
+      kind === 'custom' && this.customFx
+        ? [`#${this.customFx.color.toString(16).padStart(6, '0')}`, '#ffffff']
+        : IMPACT_COLORS[kind];
     this.puffs.spawn({
       x,
       y: y + 0.1,
@@ -303,7 +378,7 @@ export class DisasterEffects {
       size: 0.3 + Math.random() * 0.2,
       life: 0.45,
       grow: 2.4,
-      color: '#f4fbff',
+      color: mainColor,
     });
     const bits = this.reduced ? 1 : 3;
     for (let j = 0; j < bits; j++) {
@@ -318,13 +393,51 @@ export class DisasterEffects {
         size: 0.1,
         gravity: 12,
         life: 0.5,
-        color: '#dff3ff',
+        color: bitColor,
+      });
+    }
+  }
+
+  /** Flashes a glowing laser beam from `from` to `to` and pops sparks at the target. */
+  laserBeam(from: Vec3, to: Vec3): void {
+    const a = new THREE.Vector3(...from);
+    const b = new THREE.Vector3(...to);
+    const dir = b.clone().sub(a);
+    const len = dir.length();
+    if (len < 1e-4) return;
+    const beam = this.beams[this.beamCursor];
+    this.beamCursor = (this.beamCursor + 1) % this.beams.length;
+    if (beam) {
+      beam.mesh.position.copy(a).add(b).multiplyScalar(0.5);
+      beam.mesh.quaternion.setFromUnitVectors(UP_AXIS, dir.normalize());
+      beam.mesh.scale.set(1, len, 1);
+      beam.mesh.visible = true;
+      beam.len = len;
+      beam.life = LASER_LIFE;
+    }
+    const sparks = this.reduced ? 1 : 3;
+    for (let j = 0; j < sparks; j++) {
+      const ang = Math.random() * Math.PI * 2;
+      this.puffs.spawn({
+        x: to[0],
+        y: to[1],
+        z: to[2],
+        vx: Math.cos(ang) * 3,
+        vy: (Math.random() - 0.2) * 3,
+        vz: Math.sin(ang) * 3,
+        size: 0.14,
+        life: 0.25,
+        grow: 1.5,
+        color: j === 0 ? '#ffe066' : '#ff4d6d',
       });
     }
   }
 
   dispose(): void {
     for (const p of this.pools) p.dispose();
+    for (const b of this.beams) b.mesh.removeFromParent();
+    this.laserGeom.dispose();
+    this.laserMat.dispose();
     this.updateSky(0);
   }
 
@@ -423,8 +536,146 @@ export class DisasterEffects {
     }
   }
 
+  private spawnFireTornado(dt: number, lv: number, k: number): void {
+    const tones = ['#ff6a00', '#ff3d00', '#ffd54f'];
+    for (let n = this.emit('dust', 46 * lv * k, dt); n > 0; n--) {
+      const a = Math.random() * Math.PI * 2;
+      const r = 3 + Math.random() * (HALF + 3);
+      const speed = 7 + Math.random() * 5;
+      this.dust.spawn({
+        x: Math.cos(a) * r,
+        y: 0.2 + Math.random() * 6,
+        z: Math.sin(a) * r,
+        vx: -Math.sin(a) * speed,
+        vy: 2.5 + Math.random() * 3,
+        vz: Math.cos(a) * speed,
+        size: 0.15 + Math.random() * 0.18,
+        life: 0.75 + Math.random() * 0.45,
+        grow: 1.4,
+        color: tones[(Math.random() * tones.length) | 0],
+      });
+    }
+    for (let n = this.emit('streak', 18 * lv * k, dt); n > 0; n--) {
+      const a = Math.random() * Math.PI * 2;
+      const r = 6 + Math.random() * 6;
+      const speed = 18 + Math.random() * 8;
+      this.streaks.spawn({
+        x: Math.cos(a) * r,
+        y: 1 + Math.random() * 10,
+        z: Math.sin(a) * r,
+        vx: -Math.sin(a) * speed,
+        vy: 1,
+        vz: Math.cos(a) * speed,
+        size: 1.0 + Math.random() * 1.1,
+        stretch: 2.2,
+        life: 0.65 + Math.random() * 0.25,
+        color: '#ffb74d',
+      });
+    }
+  }
+
+  private spawnSnowStorm(dt: number, lv: number, k: number): void {
+    for (let n = this.emit('dust', 42 * lv * k, dt); n > 0; n--) {
+      this.dust.spawn({
+        x: -HALF - 4 + Math.random() * (ISLAND_SIZE + 8),
+        y: 8 + Math.random() * 7,
+        z: (Math.random() - 0.5) * (ISLAND_SIZE + 8),
+        vx: 4 + Math.random() * 4,
+        vy: -(5 + Math.random() * 3),
+        vz: (Math.random() - 0.5) * 3,
+        size: 0.1 + Math.random() * 0.12,
+        life: 1.2 + Math.random() * 0.5,
+        grow: 1,
+        color: '#ffffff',
+      });
+    }
+    for (let n = this.emit('streak', 18 * lv * k, dt); n > 0; n--) {
+      const speed = 22 + Math.random() * 8;
+      this.streaks.spawn({
+        x: -HALF - 8 + Math.random() * 4,
+        y: 1 + Math.random() * 10,
+        z: (Math.random() - 0.5) * (ISLAND_SIZE + 8),
+        vx: speed,
+        vy: -1,
+        vz: (Math.random() - 0.5) * 4,
+        size: 1.0 + Math.random() * 1.0,
+        stretch: 2.2,
+        life: 0.8 + Math.random() * 0.3,
+        color: '#e0f2fe',
+      });
+    }
+  }
+
+  private spawnRaid(dt: number, lv: number, k: number): void {
+    for (let n = this.emit('dust', 16 * lv * k, dt); n > 0; n--) {
+      const a = Math.random() * Math.PI * 2;
+      const r = HALF + 4 + Math.random() * 3;
+      this.dust.spawn({
+        x: Math.cos(a) * r,
+        y: 1.5 + Math.random() * 4,
+        z: Math.sin(a) * r,
+        vx: (Math.random() - 0.5) * 2,
+        vy: 1 + Math.random() * 2,
+        vz: (Math.random() - 0.5) * 2,
+        size: 0.16 + Math.random() * 0.16,
+        life: 0.7 + Math.random() * 0.4,
+        grow: 1.8,
+        color: '#94a3b8',
+      });
+    }
+  }
+
+  private spawnMeteor(dt: number, lv: number, k: number): void {
+    for (let n = this.emit('streak', 14 * lv * k, dt); n > 0; n--) {
+      this.streaks.spawn({
+        x: (Math.random() - 0.5) * (ISLAND_SIZE + 6),
+        y: 14 + Math.random() * 6,
+        z: (Math.random() - 0.5) * (ISLAND_SIZE + 6),
+        vx: (Math.random() - 0.5) * 4,
+        vy: -(18 + Math.random() * 8),
+        vz: (Math.random() - 0.5) * 4,
+        size: 1.3 + Math.random() * 1.2,
+        stretch: 2.5,
+        life: 0.55 + Math.random() * 0.25,
+        color: '#ff9800',
+      });
+    }
+  }
+
+  private spawnCustomMotes(dt: number, lv: number, k: number, color: number): void {
+    const hex = `#${color.toString(16).padStart(6, '0')}`;
+    for (let n = this.emit('streak', 16 * lv * k, dt); n > 0; n--) {
+      this.streaks.spawn({
+        x: (Math.random() - 0.5) * (ISLAND_SIZE + 8),
+        y: 2 + Math.random() * 11,
+        z: (Math.random() - 0.5) * (ISLAND_SIZE + 8),
+        vx: (Math.random() - 0.5) * 14,
+        vy: -6 - Math.random() * 6,
+        vz: (Math.random() - 0.5) * 14,
+        size: 1.0 + Math.random() * 0.9,
+        stretch: 2.0,
+        life: 0.6 + Math.random() * 0.3,
+        color: hex,
+      });
+    }
+  }
+
+  private updateBeams(dt: number): void {
+    for (const b of this.beams) {
+      if (b.life <= 0) continue;
+      b.life -= dt;
+      if (b.life <= 0) {
+        b.life = 0;
+        b.mesh.visible = false;
+      } else {
+        const w = b.life / LASER_LIFE;
+        b.mesh.scale.set(w, b.len, w);
+      }
+    }
+  }
+
   private updateShake(level: number): void {
-    if (this.reduced || this.disaster !== 'earthquake' || level <= 0) {
+    if (this.reduced || (this.disaster !== 'earthquake' && !this.customFx?.quake) || level <= 0) {
       this.shakeOffset.set(0, 0, 0);
       return;
     }
@@ -439,9 +690,12 @@ export class DisasterEffects {
 
   /** Gently darken the sky for storms; kept subtle so the island still looks sunny. */
   private updateSky(level: number): void {
-    const storm = this.disaster === 'hurricane' ? '#7f98ad' : this.disaster === 'hail' ? '#a3b4c4' : null;
-    const flood = this.disaster === 'flood' ? '#8fb3cc' : null;
-    const tint = storm ?? flood;
+    const tint =
+      this.disaster && isBuiltinDisaster(this.disaster)
+        ? (SKY_TINTS[this.disaster] ?? null)
+        : this.customFx
+          ? `#${this.customFx.color.toString(16).padStart(6, '0')}`
+          : null;
     const amount = tint ? level * 0.55 : 0;
     this.skyColors.background.copy(this.baseBackground);
     this.skyColors.fog.color.copy(this.baseFog);

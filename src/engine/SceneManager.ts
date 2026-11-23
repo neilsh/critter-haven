@@ -5,9 +5,9 @@
  */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import type { Azimuth, DisasterType, Vec3 } from '../types/blueprint';
+import type { Azimuth, DisasterType, ProjectileKind, Vec3 } from '../types/blueprint';
 import { ISLAND_SIZE } from '../types/blueprint';
-import { DisasterEffects } from './Effects';
+import { DisasterEffects, type CustomDisasterFx } from './Effects';
 
 // Low enough that the bottom HUD bar does not cover the island's front edge.
 const TARGET = new THREE.Vector3(0, 1.5, 0);
@@ -102,6 +102,9 @@ export class SceneManager {
   private rafId = 0;
   private time = 0;
   private tween: Tween | null = null;
+  private orbitMode = true;
+  private readonly savedOrbitPos = new THREE.Vector3();
+  private readonly savedOrbitTarget = new THREE.Vector3();
   private disposed = false;
 
   constructor(container: HTMLElement) {
@@ -148,6 +151,8 @@ export class SceneManager {
     this.controls.minPolarAngle = THREE.MathUtils.degToRad(15);
     this.controls.maxPolarAngle = THREE.MathUtils.degToRad(85);
     this.controls.update();
+    this.savedOrbitPos.copy(this.camera.position);
+    this.savedOrbitTarget.copy(this.controls.target);
     // A drag by the player wins over a preset tween in progress.
     this.controls.addEventListener('start', this.cancelTween);
 
@@ -178,9 +183,27 @@ export class SceneManager {
     this.tween = { from, to: from + delta, t: 0 };
   }
 
-  /** Enable/disable OrbitControls (disabled while the player drags a brace, for example). */
+  /** Enable/disable OrbitControls (disabled while the player drags a brace, or in First-Person). */
   setControlsEnabled(enabled: boolean): void {
-    this.controls.enabled = enabled;
+    this.controls.enabled = this.orbitMode && enabled;
+  }
+
+  /** Switches between Orbit camera (true) and First-Person camera (false). */
+  setOrbitMode(on: boolean): void {
+    if (this.orbitMode === on) return;
+    this.orbitMode = on;
+    if (!on) {
+      this.savedOrbitPos.copy(this.camera.position);
+      this.savedOrbitTarget.copy(this.controls.target);
+      this.cancelTween();
+      this.controls.enabled = false;
+    } else {
+      this.camera.position.copy(this.savedOrbitPos);
+      this.controls.target.copy(this.savedOrbitTarget);
+      this.camera.rotation.order = 'XYZ';
+      this.controls.enabled = true;
+      this.controls.update();
+    }
   }
 
   /**
@@ -189,13 +212,23 @@ export class SceneManager {
    * run ends or is rewound (0 means off: all effects are removed at once). As a safety net the effects
    * also switch themselves off shortly after the calls stop. Honours `prefers-reduced-motion`.
    */
-  setDisasterFx(disaster: DisasterType, intensity: number): void {
-    this.effects.setDisaster(disaster, intensity);
+  setDisasterFx(disaster: DisasterType, intensity: number, customMeta?: CustomDisasterFx): void {
+    this.effects.setDisaster(disaster, intensity, customMeta);
   }
 
   /** A hail stone hit the ground or a building at this world point (bottom of the stone). */
   hailImpact(x: number, y: number, z: number): void {
     this.effects.hailImpact(x, y, z);
+  }
+
+  /** Any disaster projectile hit the ground or a building at this world point. */
+  projectileImpact(kind: ProjectileKind, x: number, y: number, z: number): void {
+    this.effects.projectileImpact(kind, x, y, z);
+  }
+
+  /** Flashes a glowing laser beam from `from` to `to`. */
+  laserBeam(from: Vec3, to: Vec3): void {
+    this.effects.laserBeam(from, to);
   }
 
   /** Level of the animated flood plane (world y). Hidden when below -1. */
@@ -253,8 +286,10 @@ export class SceneManager {
     const dt = Math.min(this.timer.getDelta(), MAX_FRAME_DT);
     this.time += dt;
 
-    this.stepTween(dt);
-    this.controls.update();
+    if (this.orbitMode) {
+      this.stepTween(dt);
+      this.controls.update();
+    }
     this.animateScenery(dt);
     this.effects.update(dt);
 

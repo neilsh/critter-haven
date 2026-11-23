@@ -48,6 +48,8 @@ import type {
   BlueprintGraph,
   BlockData,
   DisasterType,
+  MaterialDef,
+  ProjectileKind,
   Stars,
   Strength,
   StrutData,
@@ -59,12 +61,13 @@ import {
   DEFAULT_STRENGTH,
   DISASTER_SECONDS,
   ISLAND_SIZE,
-  MATERIALS,
   blocksAtCorner,
   cellToWorld,
   cornerToWorld,
+  getMaterialDef,
   key,
 } from '../types/blueprint';
+import type { ModDisasterDef } from '../mods/mods';
 import type { MeshRegistry } from './BuildController';
 import type { PieceHandle } from './InstancedPieces';
 
@@ -80,6 +83,13 @@ type PhysicsTelemetry = Pick<
   | 'stars'
 >;
 
+export interface SimOptions {
+  customMaterials?: ReadonlyMap<string, MaterialDef>;
+  customDisaster?: ModDisasterDef;
+  gravityMultiplier?: number;
+  durationSeconds?: number;
+}
+
 export interface PhysicsEvents {
   /** id is the BlockData/StrutData id (or anchor-owning block id) whose joint broke. */
   onJointBreak?(id: string): void;
@@ -89,6 +99,10 @@ export interface PhysicsEvents {
   onWaterLevel?(y: number): void;
   /** For visuals: a hail stone first hit something, at this world point (bottom of the stone). */
   onHailImpact?(x: number, y: number, z: number): void;
+  /** For visuals: any disaster projectile first hit something. */
+  onProjectileImpact?(kind: ProjectileKind, x: number, y: number, z: number): void;
+  /** For visuals & audio: a Laser block vaporized a projectile in flight. */
+  onLaserFire?(from: Vec3, to: Vec3): void;
 }
 
 // ------------------------------------------------------------------ tuning
@@ -125,11 +139,57 @@ export const PHYSICS_TUNING = {
   /** Water rises from start to peak; the current pushes upstream faces, buoyancy lifts by material. */
   flood: { start: -1, peak: 3.2, riseSeconds: 5.5, drag: 1.2, current: 420 },
   hail: { perSecond: 7, radiusMin: 0.3, radiusMax: 0.5, density: 2.4, speed: 14, height: 14 },
+  fire_tornado: {
+    windForce: 9.5,
+    swirlSpeed: 1.8,
+    perSecond: 4.5,
+    radiusMin: 0.35,
+    radiusMax: 0.52,
+    density: 2.0,
+    speed: 14,
+  },
+  snow_storm: {
+    windForce: 8.0,
+    perSecond: 6.0,
+    radiusMin: 0.35,
+    radiusMax: 0.55,
+    density: 1.8,
+    speed: 12,
+    height: 14,
+  },
+  raid: { perSecond: 3.5, radiusMin: 0.38, radiusMax: 0.55, density: 2.4, speed: 17, spawnRadius: 15 },
+  meteor: { perSecond: 2.0, radiusMin: 0.6, radiusMax: 0.85, density: 2.9, speed: 16, height: 18 },
+  shield: { radius: 5.5, stressMultiplier: 3.0, stiffnessMultiplier: 1.8 },
+  laser: { range: 11, cooldown: 1.2 },
   /** Disaster force multiplier per strength level (medium is the calibrated baseline). */
   strength: { gentle: 0.6, medium: 1, strong: 1.4 } satisfies Record<Strength, number>,
   /** A piece whose centre drifts further than this (world units, relative to the island) has fallen. */
   standing: { tolerance: 1 },
+  player: {
+    maxHp: 100,
+    radius: 0.55,
+    height: 1.75,
+    invulnSeconds: 0.45,
+    blockHitSpeed: 2.8,
+    blockDamage: 20,
+    drownDps: 25,
+    fallY: -6,
+  },
+  projectileDamage: {
+    hail: 15,
+    snowball: 12,
+    fireball: 25,
+    raider: 28,
+    meteor: 45,
+    custom: 22,
+  } satisfies Record<ProjectileKind, number>,
 };
+
+export interface PlayerHitResult {
+  damage: number;
+  cause: string | null;
+  impact: boolean;
+}
 
 /** Star rating: 3 with zero broken joints, otherwise by the fraction of pieces still standing. */
 export function starsFor(brokenJoints: number, standingRatio: number): Stars {
@@ -176,7 +236,7 @@ const smooth = (x: number) => {
   return t * t * (3 - 2 * t);
 };
 /** 0..1 disaster envelope: ramps in over the first 1.5 s and out over the last 1.5 s. */
-const envelope = (t: number) => smooth(t / 1.5) * smooth((DISASTER_SECONDS - t) / 1.5);
+const envelope = (t: number, duration = DISASTER_SECONDS) => smooth(t / 1.5) * smooth((duration - t) / 1.5);
 
 const STRAIN_COLORS = [new THREE.Color(0x22c55e), new THREE.Color(0xfacc15), new THREE.Color(0xff6a00)];
 const tmpColor = new THREE.Color();
@@ -223,6 +283,51 @@ function configureAxisSpring(
 const isLinear = (R: Rapier, a: JointAxis) =>
   a === R.JointAxis.LinX || a === R.JointAxis.LinY || a === R.JointAxis.LinZ;
 
+function createEmojiBallTexture(emoji: string, bgHex: string): THREE.CanvasTexture | null {
+  if (typeof document === 'undefined') return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  ctx.fillStyle = bgHex;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '72px "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif';
+  ctx.fillText(emoji, 64, 64);
+  ctx.fillText(emoji, 192, 64);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function makeProjectileMat(
+  emoji: string,
+  bgHex: string,
+  fallbackColor: number,
+  opts: {
+    roughness?: number;
+    metalness?: number;
+    emissive?: number;
+    emissiveIntensity?: number;
+    transparent?: boolean;
+    opacity?: number;
+  } = {},
+): THREE.MeshStandardMaterial {
+  const map = createEmojiBallTexture(emoji, bgHex);
+  return new THREE.MeshStandardMaterial({
+    color: map ? 0xffffff : fallbackColor,
+    map,
+    roughness: opts.roughness ?? 0.5,
+    metalness: opts.metalness ?? 0,
+    emissive: opts.emissive ?? 0x000000,
+    emissiveIntensity: opts.emissiveIntensity ?? 0,
+    transparent: opts.transparent ?? false,
+    opacity: opts.opacity ?? 1,
+  });
+}
+
 // ------------------------------------------------------------------ public API
 
 export class PhysicsSim {
@@ -240,6 +345,7 @@ export class PhysicsSim {
     disaster: DisasterType,
     seed = 1,
     strength: Strength = DEFAULT_STRENGTH,
+    options?: SimOptions,
   ): Promise<void> {
     this.stop();
     const gen = this.generation;
@@ -254,6 +360,7 @@ export class PhysicsSim {
       T.strength[strength],
       this.effectsRoot,
       () => this.events,
+      options,
     );
   }
 
@@ -304,6 +411,16 @@ export class PhysicsSim {
   /** Highest strain ratio seen in the current run and the link it belongs to (calibration/tuning aid). */
   getPeakStrain(): { strain: number; id: string | null } {
     return this.run ? { strain: this.run.peakStrain, id: this.run.peakStrainId } : { strain: 0, id: null };
+  }
+
+  /** Live world centers of all blocks in the active simulation. */
+  getBlockPositions(): Vec3[] {
+    return this.run?.blockPositions() ?? [];
+  }
+
+  /** Evaluates disaster & debris hits against a First-Person player at `feet`. */
+  checkPlayerDamage(feet: Vec3, dt: number): PlayerHitResult {
+    return this.run?.checkPlayerDamage(feet, dt) ?? { damage: 0, cause: null, impact: false };
   }
 }
 
@@ -368,11 +485,26 @@ interface Link {
   broken: boolean;
 }
 
-interface Hail {
+interface Projectile {
+  kind: ProjectileKind;
   body: RigidBody;
   mesh: THREE.Mesh;
   radius: number;
+  speed: number;
+  horizSpeed: number;
+  hp: number;
   landed: boolean;
+  destroyed: boolean;
+}
+
+interface LaserEntry {
+  rec: BlockRec;
+  cooldown: number;
+}
+
+interface ShieldDome {
+  rec: BlockRec;
+  mesh: THREE.Mesh;
 }
 
 /** One disaster run: owns the Rapier world. Created only after Rapier is initialised. */
@@ -386,13 +518,19 @@ class SimRun {
   private readonly blocks: BlockRec[] = [];
   private readonly struts: StrutRec[] = [];
   private readonly links: Link[] = [];
-  private hail: Hail[] = [];
-  private readonly hailGeom = new THREE.SphereGeometry(1, 12, 8);
-  private readonly hailMat = new THREE.MeshStandardMaterial({
-    color: 0xdff3ff,
-    roughness: 0.25,
+  private readonly shieldBlocks: BlockRec[] = [];
+  private readonly shieldDomes: ShieldDome[] = [];
+  private readonly lasers: LaserEntry[] = [];
+  private projectiles: Projectile[] = [];
+  private readonly projectileGeom = new THREE.SphereGeometry(1, 16, 12);
+  private readonly projectileMats: Record<ProjectileKind, THREE.MeshStandardMaterial>;
+  private readonly shieldGeom = new THREE.SphereGeometry(T.shield.radius, 20, 14);
+  private readonly shieldMat = new THREE.MeshBasicMaterial({
+    color: 0x38bdf8,
     transparent: true,
-    opacity: 0.9,
+    opacity: 0.16,
+    depthWrite: false,
+    side: THREE.DoubleSide,
   });
 
   private readonly rng: () => number;
@@ -403,8 +541,12 @@ class SimRun {
   private gust = 1;
   private gustTarget = 1;
   private gustTimer = 0;
-  private hailAccumulator = 0;
+  private spawnAccumulator = 0;
   private readonly spawnBox: { minX: number; maxX: number; minZ: number; maxZ: number; top: number };
+  private readonly customMaterials?: ReadonlyMap<string, MaterialDef>;
+  private readonly customDisaster?: ModDisasterDef;
+  private readonly gravity: number;
+  private readonly duration: number;
 
   private mode: Telemetry['mode'] = 'simulating';
   private time = 0;
@@ -415,6 +557,7 @@ class SimRun {
   /** Set by breakLink: blocks whose last link broke must be marked loose at the next standing check. */
   private linksDirty = true;
   private standingRatio = 1;
+  private playerInvuln = 0;
 
   constructor(
     private readonly R: Rapier,
@@ -424,10 +567,42 @@ class SimRun {
     seed: number,
     /** Disaster force multiplier from the strength level. */
     private readonly power: number,
-    private readonly hailRoot: THREE.Object3D | null,
+    private readonly effectsRoot: THREE.Object3D | null,
     private readonly events: () => PhysicsEvents,
+    options?: SimOptions,
   ) {
-    const world = new this.R.World({ x: 0, y: -T.gravity, z: 0 });
+    this.customMaterials = options?.customMaterials;
+    this.customDisaster = options?.customDisaster;
+    this.gravity = T.gravity * (options?.gravityMultiplier ?? 1);
+    this.duration = options?.durationSeconds ?? DISASTER_SECONDS;
+    const customColor = this.customDisaster?.color ?? 0x84cc16;
+    const customHex = `#${customColor.toString(16).padStart(6, '0')}`;
+    this.projectileMats = {
+      hail: makeProjectileMat('🧊', '#dff3ff', 0xdff3ff, {
+        roughness: 0.25,
+        transparent: true,
+        opacity: 0.92,
+      }),
+      snowball: makeProjectileMat('❄️', '#e8f6ff', 0xf8fcff, { roughness: 0.8 }),
+      fireball: makeProjectileMat('🔥', '#ff6a00', 0xff6a00, {
+        emissive: 0xff3d00,
+        emissiveIntensity: 0.25,
+        roughness: 0.4,
+      }),
+      raider: makeProjectileMat('💣', '#37474f', 0x37474f, { roughness: 0.45, metalness: 0.3 }),
+      meteor: makeProjectileMat('☄️', '#4e342e', 0x4e342e, {
+        emissive: 0xff5722,
+        emissiveIntensity: 0.2,
+        roughness: 0.7,
+      }),
+      custom: makeProjectileMat('💥', customHex, customColor, {
+        emissive: customColor,
+        emissiveIntensity: 0.2,
+        roughness: 0.45,
+      }),
+    };
+
+    const world = new this.R.World({ x: 0, y: -this.gravity, z: 0 });
     world.timestep = T.step;
     world.numSolverIterations = T.solverIterations;
     this.world = world;
@@ -458,7 +633,7 @@ class SimRun {
         }
       : { minX: -4, maxX: 4, minZ: -4, maxZ: 4, top: 0 };
 
-    if (disaster === 'flood') {
+    if (disaster === 'flood' || this.customDisaster?.flood) {
       this.waterLevel = T.flood.start;
       this.events().onWaterLevel?.(this.waterLevel);
     }
@@ -469,7 +644,7 @@ class SimRun {
   telemetry(): PhysicsTelemetry {
     return {
       mode: this.mode,
-      timeRemaining: Math.max(0, DISASTER_SECONDS - this.time),
+      timeRemaining: Math.max(0, this.duration - this.time),
       activeJoints: this.links.length - this.brokenCount,
       brokenJoints: this.brokenCount,
       firstBrokenId: this.firstBrokenId,
@@ -477,6 +652,84 @@ class SimRun {
       standingRatio: this.standingRatio,
       stars: starsFor(this.brokenCount, this.standingRatio),
     };
+  }
+
+  blockPositions(): Vec3[] {
+    return this.blocks.map((b) => {
+      const p = b.body.translation();
+      return [p.x, p.y, p.z];
+    });
+  }
+
+  checkPlayerDamage(feet: Vec3, dt: number): PlayerHitResult {
+    if (!this.running) return { damage: 0, cause: null, impact: false };
+    const safeDt = Math.max(0, dt);
+    this.playerInvuln = Math.max(0, this.playerInvuln - safeDt);
+    const [px, py, pz] = feet;
+
+    if (py < T.player.fallY) {
+      return { damage: T.player.maxHp, cause: 'You fell off the island!', impact: true };
+    }
+
+    let damage = 0;
+    let cause: string | null = null;
+    let impact = false;
+
+    if (this.waterLevel > py + 1.45) {
+      damage += T.player.drownDps * safeDt;
+      cause = 'Swept by the flood!';
+    }
+
+    if (this.playerInvuln <= 0) {
+      let destroyedProj = false;
+      for (const proj of this.projectiles) {
+        if (proj.destroyed) continue;
+        const v = proj.body.linvel();
+        if (proj.landed && Math.hypot(v.x, v.y, v.z) < 3) continue;
+        const pp = proj.body.translation();
+        const clampedY = Math.max(
+          py + T.player.radius,
+          Math.min(py + T.player.height - T.player.radius, pp.y),
+        );
+        const d2 = (pp.x - px) ** 2 + (pp.y - clampedY) ** 2 + (pp.z - pz) ** 2;
+        const hitDist = proj.radius + T.player.radius;
+        if (d2 <= hitDist * hitDist) {
+          proj.destroyed = true;
+          destroyedProj = true;
+          this.effectsRoot?.remove(proj.mesh);
+          this.world.removeRigidBody(proj.body);
+          damage += T.projectileDamage[proj.kind];
+          cause = 'Hit by a falling hazard!';
+          impact = true;
+          this.playerInvuln = T.player.invulnSeconds;
+          break;
+        }
+      }
+      if (destroyedProj) this.projectiles = this.projectiles.filter((p) => !p.destroyed);
+
+      if (!impact) {
+        const half = CELL_SIZE / 2;
+        for (const b of this.blocks) {
+          const v = b.body.linvel();
+          if (Math.hypot(v.x, v.y, v.z) < T.player.blockHitSpeed) continue;
+          const bp = b.body.translation();
+          if (
+            Math.abs(bp.x - px) <= half + T.player.radius &&
+            Math.abs(bp.z - pz) <= half + T.player.radius &&
+            bp.y + half >= py + 0.15 &&
+            bp.y - half <= py + T.player.height
+          ) {
+            damage += T.player.blockDamage;
+            cause = 'Crushed by falling debris!';
+            impact = true;
+            this.playerInvuln = T.player.invulnSeconds;
+            break;
+          }
+        }
+      }
+    }
+
+    return { damage, cause, impact };
   }
 
   update(dtSeconds: number) {
@@ -491,10 +744,17 @@ class SimRun {
 
   dispose() {
     this.running = false;
-    for (const h of this.hail) this.hailRoot?.remove(h.mesh);
-    this.hail = [];
-    this.hailGeom.dispose();
-    this.hailMat.dispose();
+    for (const p of this.projectiles) this.effectsRoot?.remove(p.mesh);
+    this.projectiles = [];
+    for (const d of this.shieldDomes) this.effectsRoot?.remove(d.mesh);
+    this.shieldDomes.length = 0;
+    this.projectileGeom.dispose();
+    for (const mat of Object.values(this.projectileMats)) {
+      mat.map?.dispose();
+      mat.dispose();
+    }
+    this.shieldGeom.dispose();
+    this.shieldMat.dispose();
     this.world.free();
   }
 
@@ -504,7 +764,7 @@ class SimRun {
     const byCell = new Map<string, BlockRec>();
     const h = (CELL_SIZE / 2) * T.colliderScale;
     for (const b of graph.blocks) {
-      const mat = MATERIALS[b.material];
+      const mat = getMaterialDef(b.material, this.customMaterials);
       const centre = new THREE.Vector3(...cellToWorld(b.cell));
       const body = this.world.createRigidBody(
         this.R.RigidBodyDesc.dynamic().setTranslation(centre.x, centre.y, centre.z).setCanSleep(false),
@@ -531,6 +791,17 @@ class SimRun {
       };
       this.blocks.push(rec);
       byCell.set(key(b.cell), rec);
+      if (mat.special === 'shield') {
+        this.shieldBlocks.push(rec);
+        if (this.effectsRoot) {
+          const dome = new THREE.Mesh(this.shieldGeom, this.shieldMat);
+          dome.position.copy(centre);
+          this.effectsRoot.add(dome);
+          this.shieldDomes.push({ rec, mesh: dome });
+        }
+      } else if (mat.special === 'laser') {
+        this.lasers.push({ rec, cooldown: 0 });
+      }
     }
 
     const at = (c: Vec3) => byCell.get(key(c));
@@ -587,13 +858,32 @@ class SimRun {
     return joint;
   }
 
+  private startsNearShield(blocks: BlockRec[]): boolean {
+    if (this.shieldBlocks.length === 0) return false;
+    const r2 = T.shield.radius * T.shield.radius;
+    for (const s of this.shieldBlocks) {
+      for (const b of blocks) {
+        if (s.start.distanceToSquared(b.start) <= r2) return true;
+      }
+    }
+    return false;
+  }
+
   private addBlockLink(a: BlockRec, b: BlockRec, dir: Vec3) {
     const hc = CELL_SIZE / 2;
     const l1 = new THREE.Vector3(dir[0] * hc, dir[1] * hc, dir[2] * hc);
     const l2 = l1.clone().negate();
-    const ma = MATERIALS[a.data.material];
-    const mb = MATERIALS[b.data.material];
-    const joint = this.createSpring(a.body, l1, b.body, l2, Math.min(ma.stiffness, mb.stiffness), false);
+    const ma = getMaterialDef(a.data.material, this.customMaterials);
+    const mb = getMaterialDef(b.data.material, this.customMaterials);
+    const boost = this.startsNearShield([a, b]) ? T.shield.stiffnessMultiplier : 1;
+    const joint = this.createSpring(
+      a.body,
+      l1,
+      b.body,
+      l2,
+      Math.min(ma.stiffness, mb.stiffness) * boost,
+      false,
+    );
     this.links.push({
       // Report the weaker piece; on a tie the upper / later one (it is what comes loose).
       id: ma.maxStress < mb.maxStress ? a.data.id : b.data.id,
@@ -616,8 +906,9 @@ class SimRun {
     const p = rec.body.translation();
     const l1 = new THREE.Vector3(p.x, p.y - CELL_SIZE / 2, p.z); // the island body sits at the origin
     const l2 = new THREE.Vector3(0, -CELL_SIZE / 2, 0);
-    const mat = MATERIALS[rec.data.material];
-    const joint = this.createSpring(this.ground, l1, rec.body, l2, mat.stiffness, true);
+    const mat = getMaterialDef(rec.data.material, this.customMaterials);
+    const boost = this.startsNearShield([rec]) ? T.shield.stiffnessMultiplier : 1;
+    const joint = this.createSpring(this.ground, l1, rec.body, l2, mat.stiffness * boost, true);
     this.links.push({
       id: rec.data.id,
       kind: 'anchor',
@@ -627,7 +918,7 @@ class SimRun {
       local1: l1,
       local2: l2,
       rest: 0,
-      limit: mat.maxStress * T.stretchUnit * T.anchorStrength,
+      limit: mat.maxStress * T.stretchUnit * T.anchorStrength * (mat.anchorMultiplier ?? 1),
       blocks: [rec],
       strut: null,
       strain: 0,
@@ -668,8 +959,10 @@ class SimRun {
     if (!endA || !endB || endA.body === endB.body) return;
 
     const rest = initA.distanceTo(initB);
-    const mat = MATERIALS[s.material];
-    const k = T.strutStiffness * mat.stiffness;
+    const mat = getMaterialDef(s.material, this.customMaterials);
+    const attached = [endA.rec, endB.rec].filter((r) => r !== null);
+    const boost = this.startsNearShield(attached) ? T.shield.stiffnessMultiplier : 1;
+    const k = T.strutStiffness * mat.stiffness * boost;
     const damping = 2 * T.strutDampingRatio * Math.sqrt(k);
     const joint = this.world.createImpulseJoint(
       this.R.JointData.spring(rest, k, damping, endA.local, endB.local),
@@ -690,7 +983,7 @@ class SimRun {
       local2: endB.local,
       rest,
       limit: mat.maxStress * T.stretchUnit,
-      blocks: [endA.rec, endB.rec].filter((r) => r !== null),
+      blocks: attached,
       strut: rec,
       strain: 0,
       broken: false,
@@ -701,8 +994,11 @@ class SimRun {
 
   /** 0..1 strength for audio. */
   private intensity(): number {
-    const env = envelope(this.time);
+    const env = envelope(this.time, this.duration);
+    if (this.customDisaster) return env;
     if (this.disaster === 'hurricane') return env * clamp01(this.gust);
+    if (this.disaster === 'fire_tornado') return env * clamp01(0.5 + 0.5 * this.gust);
+    if (this.disaster === 'snow_storm') return env * clamp01(0.4 + 0.6 * this.gust);
     if (this.disaster === 'flood') return env * 0.7;
     return env;
   }
@@ -714,6 +1010,7 @@ class SimRun {
   }
 
   private applyDisaster() {
+    if (this.customDisaster) return this.applyCustomDisaster(this.customDisaster);
     switch (this.disaster) {
       case 'earthquake':
         return this.applyQuake();
@@ -723,13 +1020,21 @@ class SimRun {
         return this.applyFlood();
       case 'hail':
         return this.applyHail();
+      case 'fire_tornado':
+        return this.applyFireTornado();
+      case 'snow_storm':
+        return this.applySnowStorm();
+      case 'raid':
+        return this.applyRaid();
+      case 'meteor':
+        return this.applyMeteor();
     }
   }
 
-  private applyQuake() {
+  private applyQuake(scale = 1) {
     const q = T.quake;
     const t = this.time;
-    const env = envelope(t);
+    const env = envelope(t, this.duration);
     let dx = 0;
     let dz = 0;
     for (let i = 0; i < q.freqs.length; i++) {
@@ -737,11 +1042,11 @@ class SimRun {
       dx += q.weights[i] * Math.sin(w * t + this.quakePhase[i]);
       dz += q.weights[i] * Math.sin(w * 1.13 * t + this.quakePhase[i + 3]);
     }
-    const amp = q.amplitude * this.power * env;
+    const amp = q.amplitude * scale * this.power * env;
     this.ground.setNextKinematicTranslation({ x: amp * dx, y: 0, z: amp * q.zRatio * dz });
   }
 
-  private applyWind() {
+  private applyWindForce(force: number, spinSpeed: number, reset = true): { wx: number; wz: number } {
     const w = T.wind;
     this.gustTimer -= T.step;
     if (this.gustTimer <= 0) {
@@ -749,27 +1054,32 @@ class SimRun {
       this.gustTarget = w.gustMin + this.rng() * (1 - w.gustMin) * 1.3;
     }
     this.gust += (this.gustTarget - this.gust) * Math.min(1, T.step * 4);
-    this.flowAngle += this.flowSpin * T.step;
+    this.flowAngle += spinSpeed * T.step;
     const wx = Math.cos(this.flowAngle);
     const wz = Math.sin(this.flowAngle);
-    const strength = w.force * this.power * envelope(this.time) * this.gust;
+    const strength = force * this.power * envelope(this.time, this.duration) * this.gust;
     for (const b of this.blocks) {
       const height = 1 + w.heightGain * Math.max(0, b.body.translation().y);
       const f = strength * SimRun.upstreamExposure(b, wx, wz) * height;
-      b.body.resetForces(false);
+      if (reset) b.body.resetForces(false);
       b.body.addForce({ x: wx * f, y: 0, z: wz * f }, true);
     }
+    return { wx, wz };
   }
 
-  private applyFlood() {
+  private applyWind() {
+    this.applyWindForce(T.wind.force, this.flowSpin);
+  }
+
+  private applyFlood(reset = true) {
     const f = T.flood;
-    const env = envelope(this.time);
+    const env = envelope(this.time, this.duration);
     this.waterLevel = f.start + (f.peak - f.start) * smooth(this.time / f.riseSeconds);
     this.events().onWaterLevel?.(this.waterLevel);
     const cx = Math.cos(this.flowAngle);
     const cz = Math.sin(this.flowAngle);
     for (const b of this.blocks) {
-      b.body.resetForces(false);
+      if (reset) b.body.resetForces(false);
       const p = b.body.translation();
       const sub = clamp01((this.waterLevel - (p.y - CELL_SIZE / 2)) / CELL_SIZE);
       if (sub <= 0) continue;
@@ -780,7 +1090,7 @@ class SimRun {
       b.body.addForce(
         {
           x: cx * push - v.x * drag,
-          y: sub * b.mass * T.gravity * b.buoyancy - v.y * drag,
+          y: sub * b.mass * this.gravity * b.buoyancy - v.y * drag,
           z: cz * push - v.z * drag,
         },
         true,
@@ -790,24 +1100,109 @@ class SimRun {
 
   private applyHail() {
     const h = T.hail;
-    this.hailAccumulator += h.perSecond * this.power * envelope(this.time) * T.step;
-    while (this.hailAccumulator >= 1) {
-      this.hailAccumulator -= 1;
+    this.spawnAccumulator += h.perSecond * this.power * envelope(this.time, this.duration) * T.step;
+    while (this.spawnAccumulator >= 1) {
+      this.spawnAccumulator -= 1;
       this.spawnHail();
     }
-    // Report each stone's first hit (its fall is suddenly slowed), and cull stones that fell off.
-    const ev = this.events();
-    this.hail = this.hail.filter((s) => {
-      const p = s.body.translation();
-      if (!s.landed && s.body.linvel().y > -h.speed * 0.5) {
-        s.landed = true;
-        ev.onHailImpact?.(p.x, p.y - s.radius, p.z);
+    this.updateProjectiles();
+  }
+
+  private applyFireTornado() {
+    const ft = T.fire_tornado;
+    this.applyWindForce(ft.windForce, ft.swirlSpeed);
+    this.spawnAccumulator += ft.perSecond * this.power * envelope(this.time, this.duration) * T.step;
+    while (this.spawnAccumulator >= 1) {
+      this.spawnAccumulator -= 1;
+      const angle = this.flowAngle + (this.rng() - 0.5) * 2.2;
+      const dist = 12 + this.rng() * 3;
+      const sx = Math.cos(angle) * dist;
+      const sz = Math.sin(angle) * dist;
+      const sy = 2.5 + this.rng() * Math.max(6, this.spawnBox.top + 3);
+      const r = ft.radiusMin + this.rng() * (ft.radiusMax - ft.radiusMin);
+      this.spawnTargetedProjectile('fireball', sx, sy, sz, r, ft.density, ft.speed * Math.sqrt(this.power));
+    }
+    this.updateProjectiles();
+  }
+
+  private applySnowStorm() {
+    const sn = T.snow_storm;
+    const { wx, wz } = this.applyWindForce(sn.windForce, this.flowSpin);
+    this.spawnAccumulator += sn.perSecond * this.power * envelope(this.time, this.duration) * T.step;
+    while (this.spawnAccumulator >= 1) {
+      this.spawnAccumulator -= 1;
+      const b = this.spawnBox;
+      const r = sn.radiusMin + this.rng() * (sn.radiusMax - sn.radiusMin);
+      const x = b.minX + this.rng() * (b.maxX - b.minX) - wx * 2;
+      const z = b.minZ + this.rng() * (b.maxZ - b.minZ) - wz * 2;
+      const y = b.top + sn.height * (0.6 + 0.4 * this.rng());
+      const speed = sn.speed * Math.sqrt(this.power);
+      this.spawnProjectile('snowball', x, y, z, wx * 3.5, -speed, wz * 3.5, r, sn.density, speed, 0);
+    }
+    this.updateProjectiles();
+  }
+
+  private applyRaid() {
+    const rd = T.raid;
+    this.spawnAccumulator += rd.perSecond * this.power * envelope(this.time, this.duration) * T.step;
+    while (this.spawnAccumulator >= 1) {
+      this.spawnAccumulator -= 1;
+      const angle = this.rng() * Math.PI * 2;
+      const sx = Math.cos(angle) * rd.spawnRadius;
+      const sz = Math.sin(angle) * rd.spawnRadius;
+      const sy = 2 + this.rng() * Math.max(5, this.spawnBox.top + 2);
+      const r = rd.radiusMin + this.rng() * (rd.radiusMax - rd.radiusMin);
+      this.spawnTargetedProjectile('raider', sx, sy, sz, r, rd.density, rd.speed * Math.sqrt(this.power));
+    }
+    this.updateProjectiles();
+  }
+
+  private applyMeteor() {
+    const mt = T.meteor;
+    this.spawnAccumulator += mt.perSecond * this.power * envelope(this.time, this.duration) * T.step;
+    while (this.spawnAccumulator >= 1) {
+      this.spawnAccumulator -= 1;
+      const b = this.spawnBox;
+      const r = mt.radiusMin + this.rng() * (mt.radiusMax - mt.radiusMin);
+      const x = b.minX + this.rng() * (b.maxX - b.minX);
+      const z = b.minZ + this.rng() * (b.maxZ - b.minZ);
+      const y = b.top + mt.height * (0.7 + 0.3 * this.rng());
+      const speed = mt.speed * Math.sqrt(this.power);
+      const vx = (this.rng() - 0.5) * 4;
+      const vz = (this.rng() - 0.5) * 4;
+      this.spawnProjectile('meteor', x, y, z, vx, -speed, vz, r, mt.density, speed, 0);
+    }
+    this.updateProjectiles();
+  }
+
+  private applyCustomDisaster(def: ModDisasterDef) {
+    for (const b of this.blocks) b.body.resetForces(false);
+    if (def.quake) this.applyQuake(def.quake);
+    if (def.wind) this.applyWindForce(T.wind.force * def.wind, this.flowSpin, false);
+    if (def.flood) this.applyFlood(false);
+    if (def.projectiles) {
+      const p = def.projectiles;
+      const env = envelope(this.time, this.duration);
+      this.spawnAccumulator += p.rate * this.power * env * T.step;
+      while (this.spawnAccumulator >= 1) {
+        this.spawnAccumulator -= 1;
+        const speed = p.speed * Math.sqrt(this.power);
+        if (p.mode === 'rain') {
+          const b = this.spawnBox;
+          const x = b.minX + this.rng() * (b.maxX - b.minX);
+          const z = b.minZ + this.rng() * (b.maxZ - b.minZ);
+          const y = b.top + 14 * (0.6 + 0.4 * this.rng());
+          this.spawnProjectile('custom', x, y, z, 0, -speed, 0, p.radius, p.density, speed, 0);
+        } else {
+          const angle = this.rng() * Math.PI * 2;
+          const sx = Math.cos(angle) * 14.5;
+          const sz = Math.sin(angle) * 14.5;
+          const sy = 2 + this.rng() * Math.max(5, this.spawnBox.top + 2);
+          this.spawnTargetedProjectile('custom', sx, sy, sz, p.radius, p.density, speed);
+        }
       }
-      if (p.y > -20) return true;
-      this.hailRoot?.remove(s.mesh);
-      this.world.removeRigidBody(s.body);
-      return false;
-    });
+      this.updateProjectiles();
+    }
   }
 
   private spawnHail() {
@@ -817,19 +1212,140 @@ class SimRun {
     const x = b.minX + this.rng() * (b.maxX - b.minX);
     const z = b.minZ + this.rng() * (b.maxZ - b.minZ);
     const y = b.top + h.height * (0.6 + 0.4 * this.rng());
+    const speed = h.speed * Math.sqrt(this.power);
+    this.spawnProjectile('hail', x, y, z, 0, -speed, 0, r, h.density, speed, 0);
+  }
+
+  private spawnTargetedProjectile(
+    kind: ProjectileKind,
+    sx: number,
+    sy: number,
+    sz: number,
+    r: number,
+    density: number,
+    speed: number,
+  ) {
+    const b = this.spawnBox;
+    let tx = (b.minX + b.maxX) * 0.5 + (this.rng() - 0.5) * 2;
+    let ty = Math.max(1, b.top * 0.5);
+    let tz = (b.minZ + b.maxZ) * 0.5 + (this.rng() - 0.5) * 2;
+    if (this.blocks.length > 0) {
+      const target = this.blocks[Math.floor(this.rng() * this.blocks.length)];
+      if (target) {
+        const tp = target.body.translation();
+        tx = tp.x + (this.rng() - 0.5) * 1.2;
+        ty = tp.y + (this.rng() - 0.5) * 0.8;
+        tz = tp.z + (this.rng() - 0.5) * 1.2;
+      }
+    }
+    const dx = tx - sx;
+    const dy = ty - sy;
+    const dz = tz - sz;
+    const dist = Math.max(0.1, Math.hypot(dx, dy, dz));
+    const flight = dist / speed;
+    const vx = (dx / dist) * speed;
+    const vz = (dz / dist) * speed;
+    const vy = (dy / dist) * speed + 0.45 * this.gravity * flight;
+    this.spawnProjectile(kind, sx, sy, sz, vx, vy, vz, r, density, speed, Math.hypot(vx, vz));
+  }
+
+  private spawnProjectile(
+    kind: ProjectileKind,
+    x: number,
+    y: number,
+    z: number,
+    vx: number,
+    vy: number,
+    vz: number,
+    r: number,
+    density: number,
+    speed: number,
+    horizSpeed: number,
+  ) {
     const body = this.world.createRigidBody(
-      this.R.RigidBodyDesc.dynamic()
-        .setTranslation(x, y, z)
-        .setLinvel(0, -h.speed * Math.sqrt(this.power), 0)
-        .setCcdEnabled(true),
+      this.R.RigidBodyDesc.dynamic().setTranslation(x, y, z).setLinvel(vx, vy, vz).setCcdEnabled(true),
     );
-    this.world.createCollider(this.R.ColliderDesc.ball(r).setDensity(h.density).setRestitution(0.2), body);
-    const mesh = new THREE.Mesh(this.hailGeom, this.hailMat);
+    this.world.createCollider(this.R.ColliderDesc.ball(r).setDensity(density).setRestitution(0.2), body);
+    const mesh = new THREE.Mesh(this.projectileGeom, this.projectileMats[kind]);
     mesh.scale.setScalar(r);
     mesh.position.set(x, y, z);
     mesh.castShadow = true;
-    this.hailRoot?.add(mesh);
-    this.hail.push({ body, mesh, radius: r, landed: false });
+    this.effectsRoot?.add(mesh);
+    this.projectiles.push({
+      kind,
+      body,
+      mesh,
+      radius: r,
+      speed,
+      horizSpeed,
+      hp: kind === 'meteor' ? 2 : 1,
+      landed: false,
+      destroyed: false,
+    });
+  }
+
+  private updateProjectiles() {
+    // Report each projectile's first hit (its flight is suddenly slowed), and cull ones that fell off.
+    const ev = this.events();
+    this.projectiles = this.projectiles.filter((s) => {
+      if (s.destroyed) return false;
+      const p = s.body.translation();
+      const v = s.body.linvel();
+      const hit =
+        s.horizSpeed > 0.5
+          ? Math.hypot(v.x, v.z) < s.horizSpeed * 0.65 || v.y > 1.5 || p.y <= s.radius + 0.15
+          : v.y > -s.speed * 0.5;
+      if (!s.landed && hit) {
+        s.landed = true;
+        ev.onProjectileImpact?.(s.kind, p.x, p.y - s.radius, p.z);
+        if (s.kind === 'hail') ev.onHailImpact?.(p.x, p.y - s.radius, p.z);
+      }
+      if (p.y > -20) return true;
+      this.effectsRoot?.remove(s.mesh);
+      this.world.removeRigidBody(s.body);
+      return false;
+    });
+  }
+
+  private updateLasers() {
+    if (this.lasers.length === 0) return;
+    const range2 = T.laser.range * T.laser.range;
+    const ev = this.events();
+    let destroyedAny = false;
+    for (const laser of this.lasers) {
+      laser.cooldown = Math.max(0, laser.cooldown - T.step);
+      if (laser.rec.fallen || laser.cooldown > 0) continue;
+      const lp = laser.rec.body.translation();
+      let best: Projectile | null = null;
+      let bestDist2 = range2;
+      let bestPos: { x: number; y: number; z: number } | null = null;
+      for (const proj of this.projectiles) {
+        if (proj.destroyed || proj.landed) continue;
+        const pp = proj.body.translation();
+        const d2 = (pp.x - lp.x) ** 2 + (pp.y - lp.y) ** 2 + (pp.z - lp.z) ** 2;
+        if (d2 <= bestDist2) {
+          bestDist2 = d2;
+          best = proj;
+          bestPos = pp;
+        }
+      }
+      if (best && bestPos) {
+        best.hp -= 1;
+        if (best.hp <= 0) {
+          best.destroyed = true;
+          destroyedAny = true;
+          this.effectsRoot?.remove(best.mesh);
+          this.world.removeRigidBody(best.body);
+        } else {
+          best.mesh.scale.multiplyScalar(0.82);
+          const v = best.body.linvel();
+          best.body.setLinvel({ x: v.x * 0.7, y: v.y * 0.7, z: v.z * 0.7 }, true);
+        }
+        laser.cooldown = T.laser.cooldown;
+        ev.onLaserFire?.([lp.x, lp.y, lp.z], [bestPos.x, bestPos.y, bestPos.z]);
+      }
+    }
+    if (destroyedAny) this.projectiles = this.projectiles.filter((p) => !p.destroyed);
   }
 
   // ---------------------------------------------------------------- stepping & strain
@@ -837,14 +1353,15 @@ class SimRun {
   private stepOnce() {
     this.time += T.step;
     this.applyDisaster();
+    this.updateLasers();
     this.world.step();
     this.measureAndBreak();
     this.updateStanding();
     const ev = this.events();
     ev.onIntensity?.(this.disaster, this.intensity());
 
-    if (this.time >= DISASTER_SECONDS - 1e-9) {
-      this.time = DISASTER_SECONDS;
+    if (this.time >= this.duration - 1e-9) {
+      this.time = this.duration;
       this.running = false;
       this.mode = this.brokenCount === 0 ? 'survived' : 'failed';
       ev.onIntensity?.(this.disaster, 0);
@@ -866,12 +1383,30 @@ class SimRun {
     return p1.distanceTo(p2) + angle * (CELL_SIZE / 2);
   }
 
+  private isProtectedByShield(l: Link, activeShields: BlockRec[], r2: number): boolean {
+    for (const s of activeShields) {
+      const sp = s.body.translation();
+      for (const b of l.blocks) {
+        const bp = b.body.translation();
+        const d2 = (sp.x - bp.x) ** 2 + (sp.y - bp.y) ** 2 + (sp.z - bp.z) ** 2;
+        if (d2 <= r2) return true;
+      }
+    }
+    return false;
+  }
+
   private measureAndBreak() {
     for (const b of this.blocks) b.strain = 0;
     for (const s of this.struts) s.strain = 0;
+    const activeShields = this.shieldBlocks.filter((s) => !s.fallen);
+    const r2 = T.shield.radius * T.shield.radius;
     for (const l of this.links) {
       if (l.broken) continue;
-      l.strain = SimRun.linkStretch(l) / l.limit;
+      const limit =
+        activeShields.length > 0 && this.isProtectedByShield(l, activeShields, r2)
+          ? l.limit * T.shield.stressMultiplier
+          : l.limit;
+      l.strain = SimRun.linkStretch(l) / limit;
       if (l.strain > this.peakStrain) {
         this.peakStrain = l.strain;
         this.peakStrainId = l.id;
@@ -911,7 +1446,9 @@ class SimRun {
         .setRotation({ x: rot.x, y: rot.y, z: rot.z, w: rot.w }),
     );
     this.world.createCollider(
-      this.R.ColliderDesc.capsule(len / 2 - 0.15, 0.15).setDensity(MATERIALS[s.data.material].density),
+      this.R.ColliderDesc.capsule(len / 2 - 0.15, 0.15).setDensity(
+        getMaterialDef(s.data.material, this.customMaterials).density,
+      ),
       body,
     );
     s.debris = body;
@@ -992,9 +1529,13 @@ class SimRun {
       }
       tint(s.mesh, s.strain);
     }
-    for (const h of this.hail) {
-      h.mesh.position.copy(v3(h.body.translation()));
-      h.mesh.quaternion.copy(q4(h.body.rotation()));
+    for (const p of this.projectiles) {
+      p.mesh.position.copy(v3(p.body.translation()));
+      p.mesh.quaternion.copy(q4(p.body.rotation()));
+    }
+    for (const d of this.shieldDomes) {
+      d.mesh.visible = !d.rec.fallen;
+      d.mesh.position.copy(v3(d.rec.body.translation()));
     }
   }
 }

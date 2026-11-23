@@ -1,16 +1,26 @@
 import { describe, expect, it } from 'vitest';
+import { BASE_MATERIALS, MATERIALS } from '../types/blueprint';
 import { LEVELS } from './levels';
 import {
+  CLEAR_BONUS,
+  POINTS_PER_STAR,
   PROGRESS_KEY,
+  SHOP_KEY,
+  computeAvailablePoints,
+  computeSpentPoints,
+  computeTotalPoints,
   computeUnlocked,
   loadBest,
+  loadUnlockedMaterials,
   recordResult,
   saveBest,
+  saveUnlockedMaterials,
+  tryUnlockMaterial,
   type StorageLike,
 } from './progress';
 
-function fakeStorage(initial?: string): StorageLike & { data: Map<string, string> } {
-  const data = new Map<string, string>(initial === undefined ? [] : [[PROGRESS_KEY, initial]]);
+function fakeStorage(initial?: string, key = PROGRESS_KEY): StorageLike & { data: Map<string, string> } {
+  const data = new Map<string, string>(initial === undefined ? [] : [[key, initial]]);
   return {
     data,
     getItem: (k) => data.get(k) ?? null,
@@ -89,5 +99,49 @@ describe('persistence', () => {
     };
     expect(loadBest(LEVELS, blocked)).toEqual({});
     expect(() => saveBest({}, blocked)).not.toThrow();
+  });
+});
+
+describe('points and shop unlocks', () => {
+  it('computes points per best star plus clear bonus', () => {
+    expect(computeTotalPoints(LEVELS, {})).toBe(0);
+    // first has goalStars=1, third has goalStars=2
+    const best = { [first.id]: 3 as const, [third.id]: 1 as const };
+    expect(computeTotalPoints(LEVELS, best)).toBe(3 * POINTS_PER_STAR + CLEAR_BONUS + 1 * POINTS_PER_STAR);
+  });
+
+  it('computes spent and available points without dropping below zero', () => {
+    const best = { [first.id]: 2 as const }; // 2 * 100 + 50 = 250 pts
+    expect(computeSpentPoints(BASE_MATERIALS)).toBe(0);
+    expect(computeSpentPoints([...BASE_MATERIALS, 'anchor'])).toBe(MATERIALS.anchor.cost);
+    expect(computeAvailablePoints(LEVELS, best, [...BASE_MATERIALS, 'anchor'])).toBe(
+      250 - (MATERIALS.anchor.cost ?? 0),
+    );
+    expect(computeAvailablePoints(LEVELS, {}, [...BASE_MATERIALS, 'laser'])).toBe(0);
+  });
+
+  it('tryUnlockMaterial validates cost and ownership', () => {
+    const best = { [first.id]: 2 as const }; // 250 pts
+    // Laser costs 500 -> fails
+    expect(tryUnlockMaterial(LEVELS, best, BASE_MATERIALS, 'laser').ok).toBe(false);
+    // Anchor costs 150 -> succeeds
+    const buyAnchor = tryUnlockMaterial(LEVELS, best, BASE_MATERIALS, 'anchor');
+    expect(buyAnchor.ok).toBe(true);
+    expect(buyAnchor.unlocked).toContain('anchor');
+    // Buying anchor again -> fails
+    expect(tryUnlockMaterial(LEVELS, best, buyAnchor.unlocked, 'anchor').ok).toBe(false);
+    // Remaining 100 pts < Steel 250 -> fails
+    expect(tryUnlockMaterial(LEVELS, best, buyAnchor.unlocked, 'steel').ok).toBe(false);
+  });
+
+  it('round-trips unlocked materials and handles corrupt storage', () => {
+    const storage = fakeStorage();
+    saveUnlockedMaterials([...BASE_MATERIALS, 'shield'], storage);
+    expect(loadUnlockedMaterials(storage)).toEqual([...BASE_MATERIALS, 'shield']);
+    expect(loadUnlockedMaterials(fakeStorage('{bad', SHOP_KEY))).toEqual(BASE_MATERIALS);
+    expect(loadUnlockedMaterials(fakeStorage(JSON.stringify(['nope', 123, 'laser']), SHOP_KEY))).toEqual([
+      ...BASE_MATERIALS,
+      'laser',
+    ]);
   });
 });

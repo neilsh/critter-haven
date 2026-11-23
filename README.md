@@ -1,7 +1,8 @@
-# Critter Haven
+# Disaster Village
 
-A kid-friendly 3D structural engineering game. Build toy-block structures on a floating island,
-brace them with diagonal struts, then test them against earthquakes, hurricanes, floods and hail.
+A kid-friendly 3D structural engineering game. Build toy-block villages on a floating island,
+brace them with diagonal struts, unlock tech gear like shield projectors and lasers, then test your
+builds against earthquakes, hurricanes, floods, hail, fire tornadoes, snow storms, raids, and meteors.
 If your building survives 8 seconds, you win. If not, rewind and see exactly which piece broke first.
 
 Stack: Vite, React, TypeScript, Tailwind CSS, three.js, Rapier (`@dimforge/rapier3d-compat`).

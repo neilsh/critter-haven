@@ -45,10 +45,12 @@ interface BoxSpec {
   /** Ground layer, upper layers and X-braces. */
   materials: [MaterialType, MaterialType, MaterialType];
   braced?: boolean;
+  /** Optional tech/extra blocks placed after the main box (for late-game defense levels). */
+  extras?: Array<{ cell: Vec3; material: MaterialType }>;
 }
 
 /** A box at (3, 0, 3) on top of the level's starting build, optionally X-braced on every face. */
-function box(level: Level, { size: [w, d, h], materials: [ground, upper, brace], braced }: BoxSpec) {
+function box(level: Level, { size: [w, d, h], materials: [ground, upper, brace], braced, extras }: BoxSpec) {
   const g: BlueprintGraph = level.start?.() ?? { version: 1, blocks: [], struts: [] };
   const [x0, z0] = [3, 3];
   const [x1, z1] = [x0 + w, z0 + d];
@@ -62,6 +64,14 @@ function box(level: Level, { size: [w, d, h], materials: [ground, upper, brace],
         if (existing) existing.material = material; // painting a starting block
         else g.blocks.push({ id, cell, material });
       }
+  if (extras) {
+    for (const ex of extras) {
+      const id = blockId(ex.cell);
+      const existing = g.blocks.find((b) => b.id === id);
+      if (existing) existing.material = ex.material;
+      else g.blocks.push({ id, cell: ex.cell, material: ex.material });
+    }
+  }
   if (braced) {
     const add = (a: Vec3, b: Vec3) => g.struts.push({ id: strutId(a, b), a, b, material: brace });
     for (let y = 0; y < h; y += 2) {
@@ -117,6 +127,44 @@ const CASES: Record<string, { good: BoxSpec; naive?: BoxSpec }> = {
   'critter-haven': {
     good: { size: [2, 2, 4], materials: HOUSE, braced: true },
     naive: { size: [1, 1, 4], materials: HOUSE },
+  },
+  'blizzard-barn': {
+    good: { size: [2, 2, 3], materials: HOUSE, braced: true },
+    naive: { size: [1, 1, 4], materials: ['foam', 'foam', 'foam'] },
+  },
+  'flame-vortex': {
+    good: {
+      size: [2, 2, 3],
+      materials: ['anchor', 'steel', 'steel'],
+      braced: true,
+      extras: [{ cell: [3, 3, 3], material: 'laser' }],
+    },
+    naive: { size: [1, 1, 4], materials: WOOD },
+  },
+  'bandit-raid': {
+    good: {
+      size: [2, 2, 3],
+      materials: ['stone', 'steel', 'steel'],
+      braced: true,
+      extras: [
+        { cell: [3, 1, 3], material: 'shield' },
+        { cell: [4, 3, 4], material: 'laser' },
+      ],
+    },
+    naive: { size: [1, 1, 4], materials: WOOD },
+  },
+  'meteor-finale': {
+    good: {
+      size: [2, 2, 3],
+      materials: ['anchor', 'steel', 'steel'],
+      braced: true,
+      extras: [
+        { cell: [3, 1, 3], material: 'shield' },
+        { cell: [3, 3, 3], material: 'laser' },
+        { cell: [4, 3, 4], material: 'laser' },
+      ],
+    },
+    naive: { size: [1, 1, 4], materials: WOOD },
   },
 };
 

@@ -4,8 +4,8 @@
  */
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
-import type { MaterialType } from '../types/blueprint';
-import { MATERIALS } from '../types/blueprint';
+import type { BuiltinMaterialType, MaterialDef, MaterialType } from '../types/blueprint';
+import { getMaterialDef, isBuiltinMaterial } from '../types/blueprint';
 
 const BLOCK_SIZE = 1.96;
 const BLOCK_RADIUS = 0.22;
@@ -17,8 +17,26 @@ const MASTER_VOLUME = 0.6;
 /** One-shot sounds closer together than this are dropped, so a cascade of snaps stays a crackle. */
 const MIN_ONE_SHOT_GAP = 0.04;
 
-const ROUGHNESS: Record<MaterialType, number> = { wood: 0.7, stone: 0.9, bamboo: 0.5, foam: 0.85 };
-const TEXTURE_SEEDS: Record<MaterialType, number> = { wood: 11, stone: 23, bamboo: 37, foam: 53 };
+const ROUGHNESS: Record<BuiltinMaterialType, number> = {
+  wood: 0.7,
+  stone: 0.9,
+  bamboo: 0.5,
+  foam: 0.85,
+  anchor: 0.45,
+  steel: 0.35,
+  shield: 0.25,
+  laser: 0.3,
+};
+const TEXTURE_SEEDS: Record<BuiltinMaterialType, number> = {
+  wood: 11,
+  stone: 23,
+  bamboo: 37,
+  foam: 53,
+  anchor: 71,
+  steel: 89,
+  shield: 103,
+  laser: 127,
+};
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
@@ -38,7 +56,7 @@ const hex = (color: number) => `#${color.toString(16).padStart(6, '0')}`;
 
 type Painter = (g: CanvasRenderingContext2D, rnd: () => number, base: string) => void;
 
-const PAINTERS: Record<MaterialType, Painter> = {
+const PAINTERS: Record<BuiltinMaterialType, Painter> = {
   wood(g, rnd, base) {
     const S = TEXTURE_SIZE;
     g.fillStyle = base;
@@ -106,12 +124,168 @@ const PAINTERS: Record<MaterialType, Painter> = {
       g.stroke();
     }
   },
+  anchor(g, _rnd, base) {
+    const S = TEXTURE_SIZE;
+    g.fillStyle = base;
+    g.fillRect(0, 0, S, S);
+    g.strokeStyle = 'rgba(255,255,255,0.16)';
+    g.lineWidth = 6;
+    g.strokeRect(10, 10, S - 20, S - 20);
+    // Hazard stripes along the base to signal heavy ground grip.
+    g.fillStyle = '#fbbf24';
+    g.fillRect(0, S - 42, S, 42);
+    g.fillStyle = '#1e293b';
+    for (let x = -40; x < S + 40; x += 36) {
+      g.beginPath();
+      g.moveTo(x, S);
+      g.lineTo(x + 18, S);
+      g.lineTo(x + 38, S - 42);
+      g.lineTo(x + 20, S - 42);
+      g.closePath();
+      g.fill();
+    }
+    for (const [rx, ry] of [
+      [26, 26],
+      [S - 26, 26],
+      [26, S - 62],
+      [S - 26, S - 62],
+    ]) {
+      g.beginPath();
+      g.arc(rx, ry, 7, 0, Math.PI * 2);
+      g.fillStyle = '#cbd5e1';
+      g.fill();
+    }
+  },
+  steel(g, rnd, base) {
+    const S = TEXTURE_SIZE;
+    g.fillStyle = base;
+    g.fillRect(0, 0, S, S);
+    for (let i = 0; i < 60; i++) {
+      g.fillStyle = rnd() < 0.5 ? 'rgba(255,255,255,0.08)' : 'rgba(15,23,42,0.1)';
+      g.fillRect(0, rnd() * S, S, 1 + rnd() * 2);
+    }
+    g.strokeStyle = 'rgba(15,23,42,0.35)';
+    g.lineWidth = 4;
+    g.strokeRect(6, 6, S - 12, S - 12);
+    g.beginPath();
+    g.moveTo(6, S / 2);
+    g.lineTo(S - 6, S / 2);
+    g.stroke();
+    for (const [rx, ry] of [
+      [22, 22],
+      [S - 22, 22],
+      [22, S - 22],
+      [S - 22, S - 22],
+    ]) {
+      g.beginPath();
+      g.arc(rx, ry, 5, 0, Math.PI * 2);
+      g.fillStyle = 'rgba(241,245,249,0.7)';
+      g.fill();
+    }
+  },
+  shield(g, _rnd, base) {
+    const S = TEXTURE_SIZE;
+    g.fillStyle = base;
+    g.fillRect(0, 0, S, S);
+    g.fillStyle = 'rgba(12,74,110,0.38)';
+    g.fillRect(14, 14, S - 28, S - 28);
+    g.strokeStyle = '#bae6fd';
+    g.lineWidth = 6;
+    g.beginPath();
+    g.arc(S / 2, S / 2, 62, 0, Math.PI * 2);
+    g.stroke();
+    g.lineWidth = 4;
+    g.beginPath();
+    g.arc(S / 2, S / 2, 34, 0, Math.PI * 2);
+    g.stroke();
+    g.fillStyle = '#e0f2fe';
+    g.beginPath();
+    g.arc(S / 2, S / 2, 14, 0, Math.PI * 2);
+    g.fill();
+  },
+  laser(g, _rnd, base) {
+    const S = TEXTURE_SIZE;
+    g.fillStyle = base;
+    g.fillRect(0, 0, S, S);
+    g.fillStyle = 'rgba(69,10,10,0.45)';
+    g.fillRect(16, 16, S - 32, S - 32);
+    g.strokeStyle = '#fecaca';
+    g.lineWidth = 5;
+    g.beginPath();
+    g.moveTo(S / 2, 24);
+    g.lineTo(S / 2, S - 24);
+    g.moveTo(24, S / 2);
+    g.lineTo(S - 24, S / 2);
+    g.stroke();
+    g.fillStyle = '#fef08a';
+    g.beginPath();
+    g.arc(S / 2, S / 2, 26, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = '#ffffff';
+    g.beginPath();
+    g.arc(S / 2, S / 2, 12, 0, Math.PI * 2);
+    g.fill();
+  },
 };
+
+function hashString(str: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function paintCustomTexture(g: CanvasRenderingContext2D, def: MaterialDef) {
+  const S = TEXTURE_SIZE;
+  const rnd = mulberry32(hashString(def.id));
+  g.fillStyle = hex(def.color);
+  g.fillRect(0, 0, S, S);
+  for (let i = 0; i < 120; i++) {
+    g.fillStyle = rnd() < 0.5 ? 'rgba(255,255,255,0.1)' : 'rgba(15,23,42,0.1)';
+    g.fillRect(rnd() * S, rnd() * S, 4 + rnd() * 14, 4 + rnd() * 14);
+  }
+  g.strokeStyle = 'rgba(255,255,255,0.22)';
+  g.lineWidth = 8;
+  g.strokeRect(8, 8, S - 16, S - 16);
+  if (def.special === 'shield') {
+    g.strokeStyle = '#e0f2fe';
+    g.lineWidth = 5;
+    g.beginPath();
+    g.arc(S / 2, S / 2, 54, 0, Math.PI * 2);
+    g.stroke();
+  } else if (def.special === 'laser') {
+    g.strokeStyle = '#fef08a';
+    g.lineWidth = 5;
+    g.beginPath();
+    g.moveTo(S / 2, 28);
+    g.lineTo(S / 2, S - 28);
+    g.moveTo(28, S / 2);
+    g.lineTo(S - 28, S / 2);
+    g.stroke();
+  } else if (def.anchorMultiplier && def.anchorMultiplier > 1) {
+    g.fillStyle = '#fbbf24';
+    g.fillRect(0, S - 32, S, 32);
+  }
+}
 
 export class ProceduralAssets {
   private blockGeometry: THREE.BufferGeometry | null = null;
   private strutGeometry: THREE.BufferGeometry | null = null;
   private textures = new Map<MaterialType, THREE.CanvasTexture | null>();
+  private customDefs = new Map<string, MaterialDef>();
+
+  /** Registers active mod material definitions so custom blocks paint with their configured look. */
+  setCustomMaterials(defs: ReadonlyMap<string, MaterialDef>): void {
+    for (const [k, tex] of this.textures) {
+      if (!isBuiltinMaterial(k)) {
+        tex?.dispose();
+        this.textures.delete(k);
+      }
+    }
+    this.customDefs = new Map(defs);
+  }
 
   /** Rounded toy-block geometry, 2x2x2 world units minus a small gap. Shared; do not dispose per mesh. */
   getBlockGeometry(): THREE.BufferGeometry {
@@ -143,12 +317,13 @@ export class ProceduralAssets {
    */
   createMaterial(type: MaterialType): THREE.MeshStandardMaterial {
     const map = this.getTexture(type);
+    const def = getMaterialDef(type, this.customDefs);
     return new THREE.MeshStandardMaterial({
       // With a painted map the hue lives in the texture, so the tint is white. Without a DOM
       // (e.g. Node tests) fall back to the flat material colour.
-      color: map ? 0xffffff : MATERIALS[type].color,
+      color: map ? 0xffffff : def.color,
       map,
-      roughness: ROUGHNESS[type],
+      roughness: isBuiltinMaterial(type) ? ROUGHNESS[type] : 0.45,
     });
   }
 
@@ -164,7 +339,12 @@ export class ProceduralAssets {
     canvas.height = TEXTURE_SIZE;
     const g = canvas.getContext('2d');
     if (!g) return null;
-    PAINTERS[type](g, mulberry32(TEXTURE_SEEDS[type]), hex(MATERIALS[type].color));
+    const def = getMaterialDef(type, this.customDefs);
+    if (isBuiltinMaterial(type)) {
+      PAINTERS[type](g, mulberry32(TEXTURE_SEEDS[type]), hex(def.color));
+    } else {
+      paintCustomTexture(g, def);
+    }
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.wrapS = THREE.RepeatWrapping;
@@ -299,6 +479,30 @@ export class AudioSynth {
     if (!this.allowOneShot('victory')) return;
     const notes = [523.25, 659.25, 783.99, 1046.5];
     notes.forEach((f, i) => this.tone('triangle', f, f * 1.005, 0.5, 0.25, i * 0.13));
+  }
+
+  playLaserZap(): void {
+    if (!this.allowOneShot('laser')) return;
+    this.tone('sawtooth', 1400, 340, 0.09, 0.2);
+    this.tone('sine', 2100, 620, 0.07, 0.12);
+  }
+
+  playUnlock(): void {
+    if (!this.allowOneShot('unlock')) return;
+    const notes = [587.33, 783.99, 1046.5];
+    notes.forEach((f, i) => this.tone('triangle', f, f * 1.01, 0.25, 0.22, i * 0.08));
+  }
+
+  playHit(): void {
+    if (!this.allowOneShot('hit')) return;
+    this.noiseHit('lowpass', 750, 1.2, 0.12, 0.65);
+    this.tone('sawtooth', 190, 75, 0.14, 0.25);
+  }
+
+  playKO(): void {
+    if (!this.allowOneShot('ko')) return;
+    const notes = [392, 311.13, 220];
+    notes.forEach((f, i) => this.tone('sawtooth', f, f * 0.88, 0.24, 0.24, i * 0.1));
   }
 
   dispose(): void {

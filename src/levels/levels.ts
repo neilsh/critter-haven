@@ -4,7 +4,13 @@
  * disaster and strength, and unlocks the next level when `goalStars` is reached (see progress.ts).
  * Levels unlock in array order.
  */
-import type { BlueprintGraph, BuildConstraints, DisasterType, Stars, Strength } from '../types/blueprint';
+import type {
+  BlueprintGraph,
+  BuildConstraints,
+  BuiltinDisasterType,
+  Stars,
+  Strength,
+} from '../types/blueprint';
 import { PRESETS } from '../types/blueprint';
 
 export interface Level {
@@ -12,7 +18,7 @@ export interface Level {
   title: string;
   /** One kid-friendly sentence shown in the level panel. */
   blurb: string;
-  disaster: DisasterType;
+  disaster: BuiltinDisasterType;
   strength: Strength;
   seed?: number;
   constraints?: BuildConstraints;
@@ -111,12 +117,49 @@ export const LEVELS: readonly Level[] = [
   },
   {
     id: 'critter-haven',
-    title: 'Critter Haven',
-    blurb: 'The big one! A mighty storm is coming. Build a haven every critter will love.',
+    title: 'Disaster Village',
+    blurb: 'The big one! A mighty storm is coming. Build a village strong enough for anything.',
     disaster: 'hurricane',
     strength: 'strong',
     constraints: { maxBlocks: 20 },
     minHeight: 4,
+    goalStars: 2,
+  },
+  {
+    id: 'blizzard-barn',
+    title: 'Blizzard Barn',
+    blurb: 'A fierce snow storm is blowing in! Keep the village cozy against icy blasts.',
+    disaster: 'snow_storm',
+    strength: 'medium',
+    constraints: { maxBlocks: 16 },
+    goalStars: 1,
+  },
+  {
+    id: 'flame-vortex',
+    title: 'Flame Vortex',
+    blurb: 'A spinning fire tornado hurls fireballs! Hold the line with smart bracing or gear.',
+    disaster: 'fire_tornado',
+    strength: 'medium',
+    constraints: { maxBlocks: 18 },
+    goalStars: 2,
+  },
+  {
+    id: 'bandit-raid',
+    title: 'Bandit Raid',
+    blurb: 'Raiders are blasting the village from every side! Reinforce your walls or zap them.',
+    disaster: 'raid',
+    strength: 'medium',
+    constraints: { maxBlocks: 18 },
+    goalStars: 2,
+  },
+  {
+    id: 'meteor-finale',
+    title: 'Meteor Finale',
+    blurb: 'Flaming meteors from the sky! Combine strong frames, shields, and lasers to survive.',
+    disaster: 'meteor',
+    strength: 'strong',
+    constraints: { maxBlocks: 20 },
+    minHeight: 3,
     goalStars: 2,
   },
 ];

@@ -1,10 +1,14 @@
-/** Challenge-level progress: best stars per level, unlock rules and localStorage persistence. */
-import type { Stars } from '../types/blueprint';
+/** Challenge-level progress: best stars per level, unlock rules, shop points and localStorage persistence. */
+import type { BuiltinMaterialType, MaterialType, Stars } from '../types/blueprint';
+import { BASE_MATERIALS, MATERIALS, MATERIAL_ORDER, isBuiltinMaterial } from '../types/blueprint';
 import type { Level } from './levels';
 
 export type BestStars = Record<string, Stars>;
 
 export const PROGRESS_KEY = 'critter-haven:progress:v1';
+export const SHOP_KEY = 'disaster-village:shop:v1';
+export const POINTS_PER_STAR = 100;
+export const CLEAR_BONUS = 50;
 
 /** The slice of the Storage API we use, so tests can pass a fake. */
 export type StorageLike = Pick<Storage, 'getItem' | 'setItem'>;
@@ -81,4 +85,92 @@ export function recordResult(
   const before = new Set(computeUnlocked(levels, best));
   const newlyUnlocked = computeUnlocked(levels, next).find((id) => !before.has(id)) ?? null;
   return { best: next, goalReached: stars >= level.goalStars, newlyUnlocked };
+}
+
+/** Total shop points earned across all levels based on best stars and first-clear goal bonuses. */
+export function computeTotalPoints(levels: readonly Level[], best: BestStars): number {
+  let total = 0;
+  for (const level of levels) {
+    const stars = best[level.id] ?? 0;
+    if (stars <= 0) continue;
+    total += stars * POINTS_PER_STAR;
+    if (stars >= level.goalStars) total += CLEAR_BONUS;
+  }
+  return total;
+}
+
+/** Total points spent on unlocked tech blocks. */
+export function computeSpentPoints(unlocked: readonly MaterialType[]): number {
+  let spent = 0;
+  for (const m of new Set(unlocked)) {
+    if (isBuiltinMaterial(m)) spent += MATERIALS[m].cost ?? 0;
+  }
+  return spent;
+}
+
+/** Remaining points available to spend in the shop. */
+export function computeAvailablePoints(
+  levels: readonly Level[],
+  best: BestStars,
+  unlocked: readonly MaterialType[],
+): number {
+  return Math.max(0, computeTotalPoints(levels, best) - computeSpentPoints(unlocked));
+}
+
+function normalizeUnlocked(items: readonly MaterialType[]): BuiltinMaterialType[] {
+  const set = new Set<string>(BASE_MATERIALS);
+  for (const m of items) {
+    if (isBuiltinMaterial(m)) set.add(m);
+  }
+  return MATERIAL_ORDER.filter((m) => set.has(m));
+}
+
+/** Reads unlocked materials from storage, always preserving base materials. */
+export function loadUnlockedMaterials(storage: StorageLike | null = defaultStorage()): MaterialType[] {
+  const set = new Set<BuiltinMaterialType>(BASE_MATERIALS);
+  try {
+    const raw = storage?.getItem(SHOP_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    if (Array.isArray(parsed)) {
+      for (const item of parsed) {
+        if (typeof item === 'string' && isBuiltinMaterial(item)) {
+          set.add(item);
+        }
+      }
+    }
+  } catch {
+    // corrupt JSON or blocked storage: start with base materials
+  }
+  return MATERIAL_ORDER.filter((m) => set.has(m));
+}
+
+export function saveUnlockedMaterials(
+  unlocked: readonly MaterialType[],
+  storage: StorageLike | null = defaultStorage(),
+): void {
+  try {
+    storage?.setItem(SHOP_KEY, JSON.stringify(normalizeUnlocked(unlocked)));
+  } catch {
+    // quota or blocked storage: shop unlocks just will not persist
+  }
+}
+
+/** Attempts to unlock `material` using available points; returns `{ unlocked, ok }`. */
+export function tryUnlockMaterial(
+  levels: readonly Level[],
+  best: BestStars,
+  unlocked: readonly MaterialType[],
+  material: MaterialType,
+): { unlocked: MaterialType[]; ok: boolean } {
+  const current = normalizeUnlocked(unlocked);
+  if (!isBuiltinMaterial(material)) return { unlocked: current, ok: false };
+  const cost = MATERIALS[material].cost;
+  if (cost === undefined || current.includes(material)) {
+    return { unlocked: current, ok: false };
+  }
+  const available = computeAvailablePoints(levels, best, current);
+  if (available < cost) {
+    return { unlocked: current, ok: false };
+  }
+  return { unlocked: normalizeUnlocked([...current, material]), ok: true };
 }

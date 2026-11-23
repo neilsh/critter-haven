@@ -1,17 +1,35 @@
-import { Activity, CloudHail, Flag, Lock, Map as MapIcon, Star, Waves, Wind, X } from 'lucide-react';
+import {
+  Activity,
+  CloudHail,
+  Flag,
+  Flame,
+  Lock,
+  Map as MapIcon,
+  Orbit,
+  Snowflake,
+  Star,
+  Swords,
+  Waves,
+  Wind,
+  X,
+} from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { useLevelInfo } from '../levels/levelStore';
 import { LEVELS, getLevel, type Level } from '../levels/levels';
 import { useUIState } from '../state/store';
-import { MATERIALS, type DisasterType } from '../types/blueprint';
+import { getMaterialDef, type BuiltinDisasterType } from '../types/blueprint';
 import type { GameActions } from '../types/ui';
 
-const DISASTER_LABEL: Record<DisasterType, { label: string; icon: ReactNode }> = {
+const DISASTER_LABEL: Record<BuiltinDisasterType, { label: string; icon: ReactNode }> = {
   earthquake: { label: 'Earthquake', icon: <Activity size={16} /> },
   hurricane: { label: 'Hurricane', icon: <Wind size={16} /> },
   flood: { label: 'Flood', icon: <Waves size={16} /> },
   hail: { label: 'Hail', icon: <CloudHail size={16} /> },
+  fire_tornado: { label: 'Fire Tornado', icon: <Flame size={16} /> },
+  snow_storm: { label: 'Snow Storm', icon: <Snowflake size={16} /> },
+  raid: { label: 'Raids', icon: <Swords size={16} /> },
+  meteor: { label: 'Meteor Shower', icon: <Orbit size={16} /> },
 };
 
 function StarRow({ earned, total = 3, size = 16 }: { earned: number; total?: number; size?: number }) {
@@ -34,7 +52,7 @@ export function goalLines(level: Level): string[] {
   const lines = [`Get ${level.goalStars} ${level.goalStars === 1 ? 'star' : 'stars'}`];
   const c = level.constraints;
   if (c?.maxBlocks !== undefined) lines.push(`Use up to ${c.maxBlocks} blocks`);
-  if (c?.materials) lines.push(`Only ${c.materials.map((m) => MATERIALS[m].label).join(' and ')}`);
+  if (c?.materials) lines.push(`Only ${c.materials.map((m) => getMaterialDef(m).label).join(' and ')}`);
   if (level.minHeight) lines.push(`Build ${level.minHeight} blocks tall`);
   return lines;
 }
@@ -200,22 +218,25 @@ function GoalCard({ level, actions }: { level: Level; actions: GameActions }) {
 }
 
 /** Level-select button and, during a challenge, the goal card. */
-export function LevelPanel({ actions }: { actions: GameActions }) {
+export function LevelPanel({ actions, extra }: { actions: GameActions; extra?: ReactNode }) {
   const ui = useUIState();
   const [open, setOpen] = useState(false);
   const level = ui.levelId ? getLevel(ui.levelId) : undefined;
 
   return (
     <div className="flex flex-col items-center gap-2">
-      <button
-        type="button"
-        data-testid="level-toggle"
-        onClick={() => setOpen(true)}
-        className="pointer-events-auto flex min-h-12 items-center gap-1.5 rounded-2xl bg-white/90 px-4 text-sm font-extrabold shadow-md backdrop-blur active:scale-95"
-      >
-        <MapIcon size={20} aria-hidden="true" />
-        {level ? 'Levels' : 'Challenges'}
-      </button>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          data-testid="level-toggle"
+          onClick={() => setOpen(true)}
+          className="pointer-events-auto flex min-h-12 items-center gap-1.5 rounded-2xl bg-white/90 px-4 text-sm font-extrabold shadow-md backdrop-blur active:scale-95"
+        >
+          <MapIcon size={20} aria-hidden="true" />
+          {level ? 'Levels' : 'Challenges'}
+        </button>
+        {extra}
+      </div>
       {level && <GoalCard level={level} actions={actions} />}
       {open && <LevelSelect actions={actions} onClose={() => setOpen(false)} />}
     </div>
