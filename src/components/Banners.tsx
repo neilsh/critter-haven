@@ -25,7 +25,6 @@ export function Banners() {
       role="status"
       className="pointer-events-none flex flex-col items-center gap-2 rounded-3xl bg-white/95 px-6 py-4 text-center text-sky-950 shadow-2xl"
     >
-      <div data-testid={s.mode === 'survived' ? 'win-banner' : 'lose-banner'} className="contents" />
       <div data-testid="star-row" aria-label={`${s.stars} out of 3 stars`} className="flex gap-1">
         {([1, 2, 3] as const).map((n) => (
           <Star
@@ -37,7 +36,12 @@ export function Banners() {
           />
         ))}
       </div>
-      <span className="text-2xl font-black">{copy.title}</span>
+      <span
+        data-testid={s.mode === 'survived' ? 'win-banner' : 'lose-banner'}
+        className="text-2xl font-black"
+      >
+        {copy.title}
+      </span>
       <span className="text-sm font-bold">{hint}</span>
       <span data-testid="standing-percent" className="text-xs font-extrabold text-sky-700">
         {percent}% of your building was still standing
