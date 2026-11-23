@@ -27,13 +27,33 @@
  *  - Stretch of a block link = anchor-point separation + relative rotation angle * half a cell.
  *    Stretch of a strut = |length - rest length|. Strain ratio = stretch / (maxStress * stretchUnit),
  *    using the weaker material of the two pieces.
+ *  - Strength (gentle / medium / strong) scales every disaster's driving force by
+ *    PHYSICS_TUNING.strength: quake amplitude, wind force, flood current, and hail rate and speed.
+ *    Medium (x1) is the calibrated baseline. Material limits never change with strength.
+ *  - Scoring: a block is standing while it still has at least one intact link (anchor, face link
+ *    or strut) and its centre sits within `standing.tolerance` of where it started, measured relative
+ *    to the (possibly shaking) island. So an intact chunk that lost its anchor but did not move still
+ *    counts, while a block whose every joint broke is rubble even if it happens to lie in place. A
+ *    strut is standing while it is unbroken and every block it hangs from is standing. Falling is
+ *    sticky: a piece that fell stays fallen.
+ *    standingRatio = standing pieces / all pieces (1 for an empty island). Stars: 3 with zero broken
+ *    joints, else 2 at >= 80 % standing, 1 at >= 50 %, else 0 (see `starsFor`).
  *  - Hail stones are drawn as simple spheres under the effects root (see setEffectsRoot; Game
  *    passes the scene) and removed again on stop(). With no root, hail is simulated but not drawn.
  */
 import type * as RapierModule from '@dimforge/rapier3d-compat';
 import type { ImpulseJoint, ImpulseJointSet, JointAxis, RigidBody, World } from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
-import type { BlueprintGraph, BlockData, DisasterType, StrutData, Telemetry, Vec3 } from '../types/blueprint';
+import type {
+  BlueprintGraph,
+  BlockData,
+  DisasterType,
+  Stars,
+  Strength,
+  StrutData,
+  Telemetry,
+  Vec3,
+} from '../types/blueprint';
 import {
   CELL_SIZE,
   DEFAULT_STRENGTH,
@@ -45,7 +65,6 @@ import {
   cornerToWorld,
   key,
 } from '../types/blueprint';
-import type { Strength } from '../types/blueprint';
 import type { MeshRegistry } from './BuildController';
 
 type PhysicsTelemetry = Pick<
@@ -103,7 +122,19 @@ export const PHYSICS_TUNING = {
   /** Water rises from start to peak; the current pushes upstream faces, buoyancy lifts by material. */
   flood: { start: -1, peak: 3.2, riseSeconds: 5.5, drag: 1.2, current: 420 },
   hail: { perSecond: 7, radiusMin: 0.3, radiusMax: 0.5, density: 2.4, speed: 14, height: 14 },
+  /** Disaster force multiplier per strength level (medium is the calibrated baseline). */
+  strength: { gentle: 0.6, medium: 1, strong: 1.4 } satisfies Record<Strength, number>,
+  /** A piece whose centre drifts further than this (world units, relative to the island) has fallen. */
+  standing: { tolerance: 1 },
 };
+
+/** Star rating: 3 with zero broken joints, otherwise by the fraction of pieces still standing. */
+export function starsFor(brokenJoints: number, standingRatio: number): Stars {
+  if (brokenJoints === 0) return 3;
+  if (standingRatio >= 0.8) return 2;
+  if (standingRatio >= 0.5) return 1;
+  return 0;
+}
 
 const T = PHYSICS_TUNING;
 const WATER_HIDDEN = -2;
@@ -214,13 +245,22 @@ export class PhysicsSim {
     meshes: MeshRegistry,
     disaster: DisasterType,
     seed = 1,
-    _strength: Strength = DEFAULT_STRENGTH, // CONTRACT STUB: strength scaling not implemented yet
+    strength: Strength = DEFAULT_STRENGTH,
   ): Promise<void> {
     this.stop();
     const gen = this.generation;
     const rapier = await loadRapier();
     if (gen !== this.generation) return; // stopped (or restarted) while Rapier was loading
-    this.run = new SimRun(rapier, graph, meshes, disaster, seed, this.effectsRoot, () => this.events);
+    this.run = new SimRun(
+      rapier,
+      graph,
+      meshes,
+      disaster,
+      seed,
+      T.strength[strength],
+      this.effectsRoot,
+      () => this.events,
+    );
   }
 
   /** Replace event handlers (Game wires these after construction). */
@@ -287,6 +327,10 @@ interface BlockRec {
   /** Open area per horizontal face +x, -x, +z, -z (1 = open, 0.25 = shielded by a neighbour). */
   exposure: [number, number, number, number];
   strain: number;
+  /** Centre at start, for the standing check. */
+  start: THREE.Vector3;
+  /** Sticky: set once the block loses its last intact link or drifts too far. */
+  fallen: boolean;
 }
 
 interface StrutEnd {
@@ -307,6 +351,8 @@ interface StrutRec {
   endB: StrutEnd | null;
   debris: RigidBody | null;
   strain: number;
+  /** Sticky: set once the strut breaks or either block it is attached to falls. */
+  fallen: boolean;
 }
 
 interface Link {
@@ -370,6 +416,9 @@ class SimRun {
   private brokenCount = 0;
   private firstBrokenId: string | null = null;
   private waterLevel = WATER_HIDDEN;
+  /** Set by breakLink: blocks whose last link broke must be marked loose at the next standing check. */
+  private linksDirty = true;
+  private standingRatio = 1;
 
   constructor(
     private readonly R: Rapier,
@@ -377,6 +426,8 @@ class SimRun {
     meshes: MeshRegistry,
     private readonly disaster: DisasterType,
     seed: number,
+    /** Disaster force multiplier from the strength level. */
+    private readonly power: number,
     private readonly hailRoot: THREE.Object3D | null,
     private readonly events: () => PhysicsEvents,
   ) {
@@ -415,6 +466,7 @@ class SimRun {
       this.waterLevel = T.flood.start;
       this.events().onWaterLevel?.(this.waterLevel);
     }
+    this.updateStanding();
     this.syncMeshes();
   }
 
@@ -426,9 +478,8 @@ class SimRun {
       brokenJoints: this.brokenCount,
       firstBrokenId: this.firstBrokenId,
       waterLevel: this.waterLevel,
-      // CONTRACT STUBS: real scoring lands with the star-scoring work.
-      standingRatio: 1,
-      stars: 0,
+      standingRatio: this.standingRatio,
+      stars: starsFor(this.brokenCount, this.standingRatio),
     };
   }
 
@@ -479,6 +530,8 @@ class SimRun {
         buoyancy: mat.buoyancy,
         exposure: [1, 1, 1, 1],
         strain: 0,
+        start: centre.clone(),
+        fallen: false,
       };
       this.blocks.push(rec);
       byCell.set(key(b.cell), rec);
@@ -612,6 +665,7 @@ class SimRun {
       endB,
       debris: null,
       strain: 0,
+      fallen: false,
     };
     this.struts.push(rec);
     // Both ends on one body (or an invalid end): the strut just rides along, it carries no load.
@@ -687,11 +741,8 @@ class SimRun {
       dx += q.weights[i] * Math.sin(w * t + this.quakePhase[i]);
       dz += q.weights[i] * Math.sin(w * 1.13 * t + this.quakePhase[i + 3]);
     }
-    this.ground.setNextKinematicTranslation({
-      x: q.amplitude * env * dx,
-      y: 0,
-      z: q.amplitude * q.zRatio * env * dz,
-    });
+    const amp = q.amplitude * this.power * env;
+    this.ground.setNextKinematicTranslation({ x: amp * dx, y: 0, z: amp * q.zRatio * dz });
   }
 
   private applyWind() {
@@ -705,7 +756,7 @@ class SimRun {
     this.flowAngle += this.flowSpin * T.step;
     const wx = Math.cos(this.flowAngle);
     const wz = Math.sin(this.flowAngle);
-    const strength = w.force * envelope(this.time) * this.gust;
+    const strength = w.force * this.power * envelope(this.time) * this.gust;
     for (const b of this.blocks) {
       const height = 1 + w.heightGain * Math.max(0, b.body.translation().y);
       const f = strength * SimRun.upstreamExposure(b, wx, wz) * height;
@@ -729,7 +780,7 @@ class SimRun {
       const v = b.body.linvel();
       const drag = f.drag * sub * b.mass;
       // The current pushes upstream faces regardless of material, so heavy blocks resist it better.
-      const push = f.current * env * sub * SimRun.upstreamExposure(b, cx, cz);
+      const push = f.current * this.power * env * sub * SimRun.upstreamExposure(b, cx, cz);
       b.body.addForce(
         {
           x: cx * push - v.x * drag,
@@ -743,7 +794,7 @@ class SimRun {
 
   private applyHail() {
     const h = T.hail;
-    this.hailAccumulator += h.perSecond * envelope(this.time) * T.step;
+    this.hailAccumulator += h.perSecond * this.power * envelope(this.time) * T.step;
     while (this.hailAccumulator >= 1) {
       this.hailAccumulator -= 1;
       this.spawnHail();
@@ -765,7 +816,10 @@ class SimRun {
     const z = b.minZ + this.rng() * (b.maxZ - b.minZ);
     const y = b.top + h.height * (0.6 + 0.4 * this.rng());
     const body = this.world.createRigidBody(
-      this.R.RigidBodyDesc.dynamic().setTranslation(x, y, z).setLinvel(0, -h.speed, 0).setCcdEnabled(true),
+      this.R.RigidBodyDesc.dynamic()
+        .setTranslation(x, y, z)
+        .setLinvel(0, -h.speed * Math.sqrt(this.power), 0)
+        .setCcdEnabled(true),
     );
     this.world.createCollider(this.R.ColliderDesc.ball(r).setDensity(h.density).setRestitution(0.2), body);
     const mesh = new THREE.Mesh(this.hailGeom, this.hailMat);
@@ -783,6 +837,7 @@ class SimRun {
     this.applyDisaster();
     this.world.step();
     this.measureAndBreak();
+    this.updateStanding();
     const ev = this.events();
     ev.onIntensity?.(this.disaster, this.intensity());
 
@@ -835,6 +890,7 @@ class SimRun {
     l.joint = null;
     this.brokenCount++;
     this.firstBrokenId ??= l.id;
+    this.linksDirty = true;
     if (l.strut) this.makeDebris(l.strut);
     this.events().onJointBreak?.(l.id);
   }
@@ -878,6 +934,34 @@ class SimRun {
     const mid1 = a.clone().add(b).multiplyScalar(0.5);
     const pos = s.meshPos.clone().sub(mid0).applyQuaternion(rot).add(mid1);
     return { pos, quat: rot.multiply(s.meshQuat) };
+  }
+
+  // ---------------------------------------------------------------- scoring
+
+  /** Marks pieces that came loose or drifted away as fallen and refreshes standingRatio. */
+  private updateStanding() {
+    if (this.linksDirty) {
+      this.linksDirty = false;
+      const held = new Set<BlockRec>();
+      for (const l of this.links) if (!l.broken) for (const b of l.blocks) held.add(b);
+      for (const b of this.blocks) if (!held.has(b)) b.fallen = true;
+    }
+    const g = this.ground.translation();
+    const tol2 = T.standing.tolerance ** 2;
+    for (const b of this.blocks) {
+      if (b.fallen) continue;
+      const p = b.body.translation();
+      const drift2 =
+        (p.x - g.x - b.start.x) ** 2 + (p.y - g.y - b.start.y) ** 2 + (p.z - g.z - b.start.z) ** 2;
+      if (drift2 > tol2) b.fallen = true;
+    }
+    for (const s of this.struts) {
+      if (s.fallen) continue;
+      if (s.debris || s.endA?.rec?.fallen || s.endB?.rec?.fallen) s.fallen = true;
+    }
+    const total = this.blocks.length + this.struts.length;
+    const fallen = this.blocks.filter((b) => b.fallen).length + this.struts.filter((s) => s.fallen).length;
+    this.standingRatio = total === 0 ? 1 : (total - fallen) / total;
   }
 
   // ---------------------------------------------------------------- rendering sync
