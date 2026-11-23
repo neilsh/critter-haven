@@ -13,7 +13,15 @@ const PENDING = {
   presets: false, // pkg C
 };
 
-const DISASTER_TIMEOUT_MS = 30_000; // 8 s disaster plus Rapier load and slow CI frames
+/**
+ * The sim advances at most 0.05 s per rendered frame (PhysicsSim maxFrameDt), so an 8 s disaster needs
+ * >= 160 frames. Under SwiftShader a frame costs 100-300 ms (more on a 2-vCPU runner), which puts a
+ * run at 15-45 s of wall time. Budget for that explicitly instead of relying on Playwright's 30 s default.
+ */
+const DISASTER_TIMEOUT_MS = 90_000;
+const DISASTER_TEST_TIMEOUT_MS = 150_000;
+/** Software rendering cost scales with pixels; the disaster tests do not need a desktop-sized canvas. */
+const DISASTER_VIEWPORT = { width: 800, height: 500 };
 
 /** Ignore noise the browser emits on its own, not from the game. */
 const IGNORED_CONSOLE = [/favicon/i, /Download the React DevTools/i];
@@ -74,6 +82,8 @@ test.describe('strength picker', () => {
 
 test.describe('towers and houses', () => {
   test.fixme(PENDING.presets || PENDING.physics, 'needs presets (pkg C) and PhysicsSim (pkg A)');
+  test.setTimeout(DISASTER_TEST_TIMEOUT_MS);
+  test.use({ viewport: DISASTER_VIEWPORT });
 
   test('tower fails, reports a first break, and rewinds', async ({ page }) => {
     await openGame(page);
