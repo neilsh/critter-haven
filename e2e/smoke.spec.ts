@@ -13,7 +13,13 @@ const PENDING = {
   presets: false, // pkg C
 };
 
-const DISASTER_TIMEOUT_MS = 30_000; // 8 s disaster plus Rapier load and slow CI frames
+/**
+ * The sim advances at most 0.05 s per rendered frame (PhysicsSim maxFrameDt), and under SwiftShader a
+ * frame costs 100-300 ms, so a real-time 8 s disaster takes 15-45 s of wall time on CI. The disaster
+ * tests therefore only check that the frame loop drives the sim (a little real time), then finish the
+ * run with `advance`, which takes the same fixed steps synchronously.
+ */
+const FRAME_LOOP_TIMEOUT_MS = 30_000;
 
 /** Ignore noise the browser emits on its own, not from the game. */
 const IGNORED_CONSOLE = [/favicon/i, /Download the React DevTools/i];
@@ -27,11 +33,18 @@ async function telemetry(page: Page) {
   return page.evaluate(() => window.__GAME_DEBUG__!.getTelemetry());
 }
 
-async function waitForMode(page: Page, mode: 'failed' | 'survived' | 'build') {
-  await page.waitForFunction((m) => window.__GAME_DEBUG__!.getTelemetry().mode === m, mode, {
-    timeout: DISASTER_TIMEOUT_MS,
-    polling: 250,
-  });
+/** Starts an earthquake, checks real frames advance it, then runs it to the end without waiting on frames. */
+async function runEarthquake(page: Page) {
+  await page.evaluate(() => window.__GAME_DEBUG__!.startDisaster('earthquake', 1));
+  await page.waitForFunction(
+    () => {
+      const t = window.__GAME_DEBUG__!.getTelemetry();
+      return t.mode === 'simulating' && t.timeRemaining < 7.9;
+    },
+    null,
+    { timeout: FRAME_LOOP_TIMEOUT_MS, polling: 100 },
+  );
+  return page.evaluate(() => window.__GAME_DEBUG__!.advance(60));
 }
 
 test.describe('boot', () => {
@@ -80,9 +93,9 @@ test.describe('towers and houses', () => {
     await page.evaluate(() => window.__GAME_DEBUG__!.loadPreset('tower'));
     expect((await telemetry(page)).blockCount).toBeGreaterThan(0);
 
-    await page.evaluate(() => window.__GAME_DEBUG__!.startDisaster('earthquake', 1));
-    await waitForMode(page, 'failed');
-    expect((await telemetry(page)).firstBrokenId).not.toBeNull();
+    const end = await runEarthquake(page);
+    expect(end.mode).toBe('failed');
+    expect(end.firstBrokenId).not.toBeNull();
     await expect(page.getByTestId('lose-banner')).toBeVisible();
     await expect(page.getByTestId('result-banner')).toBeVisible();
     await expect(page.getByTestId('star-row')).toBeVisible();
@@ -103,9 +116,9 @@ test.describe('towers and houses', () => {
     await page.evaluate(() => window.__GAME_DEBUG__!.loadPreset('house'));
     expect((await telemetry(page)).blockCount).toBeGreaterThan(0);
 
-    await page.evaluate(() => window.__GAME_DEBUG__!.startDisaster('earthquake', 1));
-    await waitForMode(page, 'survived');
-    expect((await telemetry(page)).firstBrokenId).toBeNull();
+    const end = await runEarthquake(page);
+    expect(end.mode).toBe('survived');
+    expect(end.firstBrokenId).toBeNull();
     await expect(page.getByTestId('win-banner')).toBeVisible();
     await expect(page.getByTestId('star-row')).toBeVisible();
     await expect(page.getByTestId('countdown')).toHaveText('0');

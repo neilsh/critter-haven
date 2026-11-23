@@ -26,7 +26,7 @@ import { levelStore } from '../levels/levelStore';
 import { LEVELS, getLevel } from '../levels/levels';
 import { computeUnlocked, loadBest, recordResult, saveBest } from '../levels/progress';
 import { BuildController } from './BuildController';
-import { PhysicsSim } from './PhysicsSim';
+import { PHYSICS_TUNING, PhysicsSim } from './PhysicsSim';
 import { AudioSynth, ProceduralAssets } from './ProceduralAssets';
 import { SceneManager } from './SceneManager';
 
@@ -276,6 +276,17 @@ export class Game implements GameActions, GameDebugApi {
   }
   getGraph(): BlueprintGraph {
     return this.build.getGraph();
+  }
+  advance(seconds: number): Telemetry {
+    // Feed the sim in frame-sized slices through tick(), so standing samples and level results are
+    // recorded exactly as during real frames. Fixed steps make the outcome independent of slicing.
+    let left = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+    while (left > 1e-9 && this.physics.isRunning()) {
+      const dt = Math.min(left, PHYSICS_TUNING.maxFrameDt);
+      this.tick(dt);
+      left -= dt;
+    }
+    return this.getTelemetry();
   }
   getTelemetry(): Telemetry {
     const g = this.build.getGraph();
