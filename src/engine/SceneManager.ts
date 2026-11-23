@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { Azimuth, DisasterType, ProjectileKind, Vec3 } from '../types/blueprint';
 import { ISLAND_SIZE } from '../types/blueprint';
+import { mulberry32 } from '../utils/rng';
 import { DisasterEffects, type CustomDisasterFx } from './Effects';
 
 // Low enough that the bottom HUD bar does not cover the island's front edge.
@@ -21,18 +22,6 @@ const WATER_HIDDEN_BELOW = -1;
 
 const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
-/** Small seeded PRNG so the scenery looks the same on every load. */
-function rng(seed: number) {
-  let s = seed >>> 0;
-  return () => {
-    s = (s + 0x6d2b79f5) >>> 0;
-    let t = s;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 function grassTexture(): THREE.CanvasTexture {
   const size = 256;
   const c = document.createElement('canvas');
@@ -41,7 +30,7 @@ function grassTexture(): THREE.CanvasTexture {
   if (!g) throw new Error('2D canvas context unavailable');
   g.fillStyle = '#7ed957';
   g.fillRect(0, 0, size, size);
-  const r = rng(7);
+  const r = mulberry32(7);
   for (let i = 0; i < 1400; i++) {
     const light = r() > 0.5;
     g.fillStyle = light ? 'rgba(190,255,120,0.35)' : 'rgba(60,150,60,0.3)';
@@ -396,7 +385,7 @@ export class SceneManager {
     dirt.position.y = -1.15 - 4.5;
     dirt.castShadow = true;
 
-    const r = rng(42);
+    const r = mulberry32(42);
     const rockMat = new THREE.MeshStandardMaterial({ color: '#9aa3ad', roughness: 0.9, flatShading: true });
     const rocks = new THREE.Group();
     for (let i = 0; i < 6; i++) {
@@ -434,7 +423,7 @@ export class SceneManager {
   }
 
   private buildClouds(): void {
-    const r = rng(99);
+    const r = mulberry32(99);
     const geo = new THREE.SphereGeometry(1, 12, 8);
     const mat = new THREE.MeshStandardMaterial({
       color: '#ffffff',

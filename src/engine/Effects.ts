@@ -10,6 +10,7 @@
 import * as THREE from 'three';
 import type { BuiltinDisasterType, DisasterType, ProjectileKind, Vec3 } from '../types/blueprint';
 import { ISLAND_SIZE, isBuiltinDisaster } from '../types/blueprint';
+import { intToHex } from '../utils/color';
 
 export interface CustomDisasterFx {
   color: number;
@@ -365,9 +366,7 @@ export class DisasterEffects {
   projectileImpact(kind: ProjectileKind, x: number, y: number, z: number): void {
     if (!this.disaster || this.level <= 0) return;
     const [mainColor, bitColor] =
-      kind === 'custom' && this.customFx
-        ? [`#${this.customFx.color.toString(16).padStart(6, '0')}`, '#ffffff']
-        : IMPACT_COLORS[kind];
+      kind === 'custom' && this.customFx ? [intToHex(this.customFx.color), '#ffffff'] : IMPACT_COLORS[kind];
     this.puffs.spawn({
       x,
       y: y + 0.1,
@@ -643,7 +642,7 @@ export class DisasterEffects {
   }
 
   private spawnCustomMotes(dt: number, lv: number, k: number, color: number): void {
-    const hex = `#${color.toString(16).padStart(6, '0')}`;
+    const hex = intToHex(color);
     for (let n = this.emit('streak', 16 * lv * k, dt); n > 0; n--) {
       this.streaks.spawn({
         x: (Math.random() - 0.5) * (ISLAND_SIZE + 8),
@@ -694,7 +693,7 @@ export class DisasterEffects {
       this.disaster && isBuiltinDisaster(this.disaster)
         ? (SKY_TINTS[this.disaster] ?? null)
         : this.customFx
-          ? `#${this.customFx.color.toString(16).padStart(6, '0')}`
+          ? intToHex(this.customFx.color)
           : null;
     const amount = tint ? level * 0.55 : 0;
     this.skyColors.background.copy(this.baseBackground);

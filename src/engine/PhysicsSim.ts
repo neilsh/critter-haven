@@ -41,16 +41,13 @@
  *  - Hail stones are drawn as simple spheres under the effects root (see setEffectsRoot; Game
  *    passes the scene) and removed again on stop(). With no root, hail is simulated but not drawn.
  */
-import type * as RapierModule from '@dimforge/rapier3d-compat';
-import type { ImpulseJoint, ImpulseJointSet, JointAxis, RigidBody, World } from '@dimforge/rapier3d-compat';
+import type { RigidBody, World } from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import type {
   BlueprintGraph,
-  BlockData,
   DisasterType,
   MaterialDef,
   ProjectileKind,
-  Stars,
   Strength,
   StrutData,
   Telemetry,
@@ -68,190 +65,30 @@ import {
   key,
 } from '../types/blueprint';
 import type { ModDisasterDef } from '../mods/mods';
+import { mulberry32 } from '../utils/rng';
 import type { MeshRegistry } from './BuildController';
-import type { PieceHandle } from './InstancedPieces';
+import { createProjectileMaterials, type Projectile } from './physics/projectiles';
+import { configureAxisSpring, isLinear, loadRapier, type Rapier } from './physics/rapier';
+import {
+  PHYSICS_TUNING,
+  WATER_HIDDEN,
+  clamp01,
+  envelope,
+  smooth,
+  starsFor,
+  tint,
+  type PhysicsEvents,
+  type PhysicsTelemetry,
+  type PlayerHitResult,
+  type SimOptions,
+} from './physics/tuning';
+import type { BlockRec, LaserEntry, Link, ShieldDome, StrutEnd, StrutRec } from './physics/types';
 
-type PhysicsTelemetry = Pick<
-  Telemetry,
-  | 'mode'
-  | 'timeRemaining'
-  | 'activeJoints'
-  | 'brokenJoints'
-  | 'firstBrokenId'
-  | 'waterLevel'
-  | 'standingRatio'
-  | 'stars'
->;
-
-export interface SimOptions {
-  customMaterials?: ReadonlyMap<string, MaterialDef>;
-  customDisaster?: ModDisasterDef;
-  gravityMultiplier?: number;
-  durationSeconds?: number;
-}
-
-export interface PhysicsEvents {
-  /** id is the BlockData/StrutData id (or anchor-owning block id) whose joint broke. */
-  onJointBreak?(id: string): void;
-  onSurvived?(): void;
-  /** For sound: 0..1 strength of the current disaster, called every step. */
-  onIntensity?(disaster: DisasterType, intensity: number): void;
-  onWaterLevel?(y: number): void;
-  /** For visuals: a hail stone first hit something, at this world point (bottom of the stone). */
-  onHailImpact?(x: number, y: number, z: number): void;
-  /** For visuals: any disaster projectile first hit something. */
-  onProjectileImpact?(kind: ProjectileKind, x: number, y: number, z: number): void;
-  /** For visuals & audio: a Laser block vaporized a projectile in flight. */
-  onLaserFire?(from: Vec3, to: Vec3): void;
-}
-
-// ------------------------------------------------------------------ tuning
-
-/**
- * Calibrated by PhysicsSim.test.ts: the unbraced tower must fail and the starter house must survive
- * an earthquake, and the other disasters must behave sensibly. Re-run the tests after any change.
- */
-export const PHYSICS_TUNING = {
-  step: 1 / 60,
-  maxFrameDt: 0.05,
-  gravity: 9.81,
-  solverIterations: 8,
-  /** World units of stretch that a maxStress = 1 joint tolerates. */
-  stretchUnit: 0.06,
-  /** Foundation anchors are this much stronger than the block's own material. */
-  anchorStrength: 1,
-  /** Acceleration-based spring stiffness (1/s^2) of block links, times material stiffness. */
-  linkLinStiffness: 100_000,
-  linkAngStiffness: 3000,
-  linkDampingRatio: 0.6,
-  /** Acceleration-based stiffness of strut distance springs, times material stiffness. */
-  strutStiffness: 100_000,
-  strutDampingRatio: 0.6,
-  /**
-   * Block collider horizontal half extent as a fraction of half a cell (the gap stops edge-touching
-   * neighbours colliding). Vertically colliders are full height so ground blocks rest exactly on the island.
-   */
-  colliderScale: 0.97,
-  /** Island displacement: layered sines (world units, Hz), z gets a weaker copy. */
-  quake: { amplitude: 0.22, freqs: [1.6, 2.7, 4.1], weights: [1, 0.45, 0.2], zRatio: 0.35 },
-  /** Wind force per unit of open upwind face, grows with height; gusts vary between gustMin and ~1.3. */
-  wind: { force: 12, gustMin: 0.45, heightGain: 0.35 },
-  /** Water rises from start to peak; the current pushes upstream faces, buoyancy lifts by material. */
-  flood: { start: -1, peak: 3.2, riseSeconds: 5.5, drag: 1.2, current: 420 },
-  hail: { perSecond: 7, radiusMin: 0.3, radiusMax: 0.5, density: 2.4, speed: 14, height: 14 },
-  fire_tornado: {
-    windForce: 9.5,
-    swirlSpeed: 1.8,
-    perSecond: 4.5,
-    radiusMin: 0.35,
-    radiusMax: 0.52,
-    density: 2.0,
-    speed: 14,
-  },
-  snow_storm: {
-    windForce: 8.0,
-    perSecond: 6.0,
-    radiusMin: 0.35,
-    radiusMax: 0.55,
-    density: 1.8,
-    speed: 12,
-    height: 14,
-  },
-  raid: { perSecond: 3.5, radiusMin: 0.38, radiusMax: 0.55, density: 2.4, speed: 17, spawnRadius: 15 },
-  meteor: { perSecond: 2.0, radiusMin: 0.6, radiusMax: 0.85, density: 2.9, speed: 16, height: 18 },
-  shield: { radius: 5.5, stressMultiplier: 3.0, stiffnessMultiplier: 1.8 },
-  laser: { range: 11, cooldown: 1.2 },
-  /** Disaster force multiplier per strength level (medium is the calibrated baseline). */
-  strength: { gentle: 0.6, medium: 1, strong: 1.4 } satisfies Record<Strength, number>,
-  /** A piece whose centre drifts further than this (world units, relative to the island) has fallen. */
-  standing: { tolerance: 1 },
-  player: {
-    maxHp: 100,
-    radius: 0.55,
-    height: 1.75,
-    invulnSeconds: 0.45,
-    blockHitSpeed: 2.8,
-    blockDamage: 20,
-    drownDps: 25,
-    fallY: -6,
-  },
-  projectileDamage: {
-    hail: 15,
-    snowball: 12,
-    fireball: 25,
-    raider: 28,
-    meteor: 45,
-    custom: 22,
-  } satisfies Record<ProjectileKind, number>,
-};
-
-export interface PlayerHitResult {
-  damage: number;
-  cause: string | null;
-  impact: boolean;
-}
-
-/** Star rating: 3 with zero broken joints, otherwise by the fraction of pieces still standing. */
-export function starsFor(brokenJoints: number, standingRatio: number): Stars {
-  if (brokenJoints === 0) return 3;
-  if (standingRatio >= 0.8) return 2;
-  if (standingRatio >= 0.5) return 1;
-  return 0;
-}
+export { PHYSICS_TUNING, loadRapier, starsFor };
+export type { PhysicsEvents, PlayerHitResult, SimOptions };
+export const makeRng = mulberry32;
 
 const T = PHYSICS_TUNING;
-const WATER_HIDDEN = -2;
-
-// ------------------------------------------------------------------ helpers
-
-type Rapier = typeof RapierModule;
-let rapierReady: Promise<Rapier> | null = null;
-/**
- * Load and initialise Rapier once per process. The dynamic import keeps the ~2 MB module (its wasm
- * is embedded, nothing is fetched) out of the main bundle until the first disaster.
- */
-export function loadRapier(): Promise<Rapier> {
-  rapierReady ??= import('@dimforge/rapier3d-compat').then(async (rapier) => {
-    await rapier.init();
-    return rapier;
-  });
-  return rapierReady;
-}
-
-/** mulberry32: small deterministic PRNG returning [0, 1). */
-export function makeRng(seed: number) {
-  let a = seed >>> 0 || 0x9e3779b9;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
-const smooth = (x: number) => {
-  const t = clamp01(x);
-  return t * t * (3 - 2 * t);
-};
-/** 0..1 disaster envelope: ramps in over the first 1.5 s and out over the last 1.5 s. */
-const envelope = (t: number, duration = DISASTER_SECONDS) => smooth(t / 1.5) * smooth((duration - t) / 1.5);
-
-const STRAIN_COLORS = [new THREE.Color(0x22c55e), new THREE.Color(0xfacc15), new THREE.Color(0xff6a00)];
-const tmpColor = new THREE.Color();
-/** Green (0) -> yellow (0.5) -> orange (1+). */
-function strainColor(s: number, out: THREE.Color) {
-  const x = clamp01(s) * 2;
-  const i = Math.min(1, Math.floor(x));
-  return out.copy(STRAIN_COLORS[i]).lerp(STRAIN_COLORS[i + 1], x - i);
-}
-
-/** Stress X-ray: emissive tint by strain ratio, per piece handle (drawn as a per-instance colour). */
-function tint(piece: PieceHandle, strain: number) {
-  piece.emissive.copy(strainColor(strain, tmpColor));
-  piece.emissiveIntensity = 0.25 + 0.6 * clamp01(strain);
-}
 
 const tmpP1 = new THREE.Vector3();
 const tmpP2 = new THREE.Vector3();
@@ -268,78 +105,6 @@ const tmpRot = new THREE.Quaternion();
 const tmpPos = new THREE.Vector3();
 const tmpQuat = new THREE.Quaternion();
 const UP_UNIT = new THREE.Vector3(0, 1, 0);
-
-type RawJointSet = ImpulseJointSet['raw'];
-type RawAxis = Parameters<RawJointSet['jointConfigureMotorPosition']>[1];
-type RawMotorModel = Parameters<RawJointSet['jointConfigureMotorModel']>[2];
-/**
- * The TS wrapper has no per-axis motor API for generic joints, but the raw joint set does. Its wasm
- * enums are not re-exported; their values are identical to the public JointAxis / MotorModel enums.
- */
-function configureAxisSpring(
-  R: Rapier,
-  set: ImpulseJointSet,
-  joint: ImpulseJoint,
-  axis: JointAxis,
-  target: number,
-  stiffness: number,
-  damping: number,
-) {
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- identical wasm enum, see above
-  const rawAxis = axis as unknown as RawAxis;
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- identical wasm enum, see above
-  const model = R.MotorModel.AccelerationBased as unknown as RawMotorModel;
-  set.raw.jointConfigureMotorModel(joint.handle, rawAxis, model);
-  set.raw.jointConfigureMotorPosition(joint.handle, rawAxis, target, stiffness, damping);
-}
-
-const isLinear = (R: Rapier, a: JointAxis) =>
-  a === R.JointAxis.LinX || a === R.JointAxis.LinY || a === R.JointAxis.LinZ;
-
-function createEmojiBallTexture(emoji: string, bgHex: string): THREE.CanvasTexture | null {
-  if (typeof document === 'undefined') return null;
-  const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 128;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return null;
-  ctx.fillStyle = bgHex;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.font = '72px "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif';
-  ctx.fillText(emoji, 64, 64);
-  ctx.fillText(emoji, 192, 64);
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
-function makeProjectileMat(
-  emoji: string,
-  bgHex: string,
-  fallbackColor: number,
-  opts: {
-    roughness?: number;
-    metalness?: number;
-    emissive?: number;
-    emissiveIntensity?: number;
-    transparent?: boolean;
-    opacity?: number;
-  } = {},
-): THREE.MeshStandardMaterial {
-  const map = createEmojiBallTexture(emoji, bgHex);
-  return new THREE.MeshStandardMaterial({
-    color: map ? 0xffffff : fallbackColor,
-    map,
-    roughness: opts.roughness ?? 0.5,
-    metalness: opts.metalness ?? 0,
-    emissive: opts.emissive ?? 0x000000,
-    emissiveIntensity: opts.emissiveIntensity ?? 0,
-    transparent: opts.transparent ?? false,
-    opacity: opts.opacity ?? 1,
-  });
-}
 
 // ------------------------------------------------------------------ public API
 
@@ -437,89 +202,6 @@ export class PhysicsSim {
   }
 }
 
-// ------------------------------------------------------------------ internal records
-
-interface BlockRec {
-  data: BlockData;
-  body: RigidBody;
-  mesh: PieceHandle | undefined;
-  /** Mesh pose relative to the body, captured at start (keeps us agnostic of mesh conventions). */
-  meshOffsetPos: THREE.Vector3;
-  meshOffsetQuat: THREE.Quaternion;
-  mass: number;
-  buoyancy: number;
-  /** Open area per horizontal face +x, -x, +z, -z (1 = open, 0.25 = shielded by a neighbour). */
-  exposure: [number, number, number, number];
-  strain: number;
-  /** Centre at start, for the standing check. */
-  start: THREE.Vector3;
-  /** Sticky: set once the block loses its last intact link or drifts too far. */
-  fallen: boolean;
-}
-
-interface StrutEnd {
-  body: RigidBody;
-  local: THREE.Vector3;
-  rec: BlockRec | null;
-}
-
-interface StrutRec {
-  data: StrutData;
-  mesh: PieceHandle | undefined;
-  initA: THREE.Vector3;
-  initB: THREE.Vector3;
-  /** Mesh pose at start; after breaking, relative to the debris body instead. */
-  meshPos: THREE.Vector3;
-  meshQuat: THREE.Quaternion;
-  endA: StrutEnd | null;
-  endB: StrutEnd | null;
-  debris: RigidBody | null;
-  strain: number;
-  /** Sticky: set once the strut breaks or either block it is attached to falls. */
-  fallen: boolean;
-}
-
-interface Link {
-  /** Id reported on break. */
-  id: string;
-  kind: 'face' | 'anchor' | 'strut';
-  joint: ImpulseJoint | null;
-  body1: RigidBody;
-  body2: RigidBody;
-  local1: THREE.Vector3;
-  local2: THREE.Vector3;
-  /** Rest length (struts only). */
-  rest: number;
-  /** Stretch (world units) at which the link breaks. */
-  limit: number;
-  blocks: BlockRec[];
-  strut: StrutRec | null;
-  strain: number;
-  broken: boolean;
-}
-
-interface Projectile {
-  kind: ProjectileKind;
-  body: RigidBody;
-  mesh: THREE.Mesh;
-  radius: number;
-  speed: number;
-  horizSpeed: number;
-  hp: number;
-  landed: boolean;
-  destroyed: boolean;
-}
-
-interface LaserEntry {
-  rec: BlockRec;
-  cooldown: number;
-}
-
-interface ShieldDome {
-  rec: BlockRec;
-  mesh: THREE.Mesh;
-}
-
 /** One disaster run: owns the Rapier world. Created only after Rapier is initialised. */
 class SimRun {
   running = true;
@@ -589,31 +271,7 @@ class SimRun {
     this.gravity = T.gravity * (options?.gravityMultiplier ?? 1);
     this.duration = options?.durationSeconds ?? DISASTER_SECONDS;
     const customColor = this.customDisaster?.color ?? 0x84cc16;
-    const customHex = `#${customColor.toString(16).padStart(6, '0')}`;
-    this.projectileMats = {
-      hail: makeProjectileMat('🧊', '#dff3ff', 0xdff3ff, {
-        roughness: 0.25,
-        transparent: true,
-        opacity: 0.92,
-      }),
-      snowball: makeProjectileMat('❄️', '#e8f6ff', 0xf8fcff, { roughness: 0.8 }),
-      fireball: makeProjectileMat('🔥', '#ff6a00', 0xff6a00, {
-        emissive: 0xff3d00,
-        emissiveIntensity: 0.25,
-        roughness: 0.4,
-      }),
-      raider: makeProjectileMat('💣', '#37474f', 0x37474f, { roughness: 0.45, metalness: 0.3 }),
-      meteor: makeProjectileMat('☄️', '#4e342e', 0x4e342e, {
-        emissive: 0xff5722,
-        emissiveIntensity: 0.2,
-        roughness: 0.7,
-      }),
-      custom: makeProjectileMat('💥', customHex, customColor, {
-        emissive: customColor,
-        emissiveIntensity: 0.2,
-        roughness: 0.45,
-      }),
-    };
+    this.projectileMats = createProjectileMaterials(customColor);
 
     const world = new this.R.World({ x: 0, y: -this.gravity, z: 0 });
     world.timestep = T.step;

@@ -1,36 +1,13 @@
-import {
-  Activity,
-  CloudHail,
-  Flag,
-  Flame,
-  Lock,
-  Map as MapIcon,
-  Orbit,
-  Snowflake,
-  Star,
-  Swords,
-  Waves,
-  Wind,
-  X,
-} from 'lucide-react';
+import { Flag, Lock, Map as MapIcon, Star, X } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { useLevelInfo } from '../levels/levelStore';
 import { LEVELS, getLevel, type Level } from '../levels/levels';
 import { useUIState } from '../state/store';
-import { getMaterialDef, type BuiltinDisasterType } from '../types/blueprint';
+import { getMaterialDef } from '../types/blueprint';
 import type { GameActions } from '../types/ui';
-
-const DISASTER_LABEL: Record<BuiltinDisasterType, { label: string; icon: ReactNode }> = {
-  earthquake: { label: 'Earthquake', icon: <Activity size={16} /> },
-  hurricane: { label: 'Hurricane', icon: <Wind size={16} /> },
-  flood: { label: 'Flood', icon: <Waves size={16} /> },
-  hail: { label: 'Hail', icon: <CloudHail size={16} /> },
-  fire_tornado: { label: 'Fire Tornado', icon: <Flame size={16} /> },
-  snow_storm: { label: 'Snow Storm', icon: <Snowflake size={16} /> },
-  raid: { label: 'Raids', icon: <Swords size={16} /> },
-  meteor: { label: 'Meteor Shower', icon: <Orbit size={16} /> },
-};
+import { DISASTER_META } from './disasterMeta';
+import { Modal } from './Modal';
 
 function StarRow({ earned, total = 3, size = 16 }: { earned: number; total?: number; size?: number }) {
   return (
@@ -60,20 +37,6 @@ export function goalLines(level: Level): string[] {
 function LevelSelect({ actions, onClose }: { actions: GameActions; onClose: () => void }) {
   const ui = useUIState();
   const { best } = useLevelInfo();
-  const closeRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    actions.setModalOpen(true);
-    closeRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('keydown', onKey);
-      actions.setModalOpen(false);
-    };
-  }, [actions, onClose]);
 
   const pick = (id: string | null) => {
     actions.selectLevel(id);
@@ -81,73 +44,60 @@ function LevelSelect({ actions, onClose }: { actions: GameActions; onClose: () =
   };
 
   return (
-    <div className="pointer-events-auto fixed inset-0 z-20 flex items-center justify-center bg-sky-950/40 p-3">
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="Challenge levels"
-        data-testid="level-select"
-        className="flex max-h-full w-full max-w-3xl flex-col gap-3 overflow-y-auto rounded-3xl bg-sky-50 p-4 shadow-2xl"
+    <Modal
+      title="Pick a challenge"
+      ariaLabel="Challenge levels"
+      testId="level-select"
+      closeTestId="level-close"
+      maxWidthClass="max-w-3xl"
+      onClose={onClose}
+      onOpenChange={(open) => actions.setModalOpen(open)}
+    >
+      <button
+        type="button"
+        data-testid="level-free-build"
+        onClick={() => pick(null)}
+        className={`rounded-2xl px-4 py-3 text-left font-extrabold shadow-md active:scale-95 ${
+          ui.levelId === null ? 'bg-amber-300 text-amber-950' : 'bg-white'
+        }`}
       >
-        <div className="flex items-center justify-between gap-2">
-          <h2 className="text-xl font-black">Pick a challenge</h2>
-          <button
-            ref={closeRef}
-            type="button"
-            data-testid="level-close"
-            aria-label="Close"
-            onClick={onClose}
-            className="flex size-12 items-center justify-center rounded-2xl bg-white shadow-md active:scale-95"
-          >
-            <X size={22} />
-          </button>
-        </div>
+        Free build <span className="font-semibold">Build anything, test any disaster.</span>
+      </button>
 
-        <button
-          type="button"
-          data-testid="level-free-build"
-          onClick={() => pick(null)}
-          className={`rounded-2xl px-4 py-3 text-left font-extrabold shadow-md active:scale-95 ${
-            ui.levelId === null ? 'bg-amber-300 text-amber-950' : 'bg-white'
-          }`}
-        >
-          Free build <span className="font-semibold">Build anything, test any disaster.</span>
-        </button>
-
-        <ol className="grid gap-2 sm:grid-cols-2">
-          {LEVELS.map((level, i) => {
-            const unlocked = ui.unlocked.includes(level.id);
-            const stars = best[level.id] ?? 0;
-            return (
-              <li key={level.id}>
-                <button
-                  type="button"
-                  data-testid={`level-${level.id}`}
-                  disabled={!unlocked}
-                  aria-current={ui.levelId === level.id}
-                  onClick={() => pick(level.id)}
-                  className={`flex min-h-24 w-full flex-col gap-1 rounded-2xl p-3 text-left shadow-md transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 ${
-                    ui.levelId === level.id ? 'bg-amber-300 text-amber-950' : 'bg-white'
-                  }`}
-                >
-                  <span className="flex items-center justify-between gap-2 font-black">
-                    <span>
-                      {i + 1}. {level.title}
-                    </span>
-                    {unlocked ? <StarRow earned={stars} /> : <Lock size={18} aria-label="Locked" />}
+      <ol className="grid gap-2 sm:grid-cols-2">
+        {LEVELS.map((level, i) => {
+          const unlocked = ui.unlocked.includes(level.id);
+          const stars = best[level.id] ?? 0;
+          const meta = DISASTER_META[level.disaster];
+          return (
+            <li key={level.id}>
+              <button
+                type="button"
+                data-testid={`level-${level.id}`}
+                disabled={!unlocked}
+                aria-current={ui.levelId === level.id}
+                onClick={() => pick(level.id)}
+                className={`flex min-h-24 w-full flex-col gap-1 rounded-2xl p-3 text-left shadow-md transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 ${
+                  ui.levelId === level.id ? 'bg-amber-300 text-amber-950' : 'bg-white'
+                }`}
+              >
+                <span className="flex items-center justify-between gap-2 font-black">
+                  <span>
+                    {i + 1}. {level.title}
                   </span>
-                  <span className="flex items-center gap-1 text-xs font-bold text-sky-800">
-                    {DISASTER_LABEL[level.disaster].icon}
-                    {DISASTER_LABEL[level.disaster].label}, {level.strength}
-                  </span>
-                  <span className="text-sm font-semibold">{level.blurb}</span>
-                </button>
-              </li>
-            );
-          })}
-        </ol>
-      </div>
-    </div>
+                  {unlocked ? <StarRow earned={stars} /> : <Lock size={18} aria-label="Locked" />}
+                </span>
+                <span className="flex items-center gap-1 text-xs font-bold text-sky-800">
+                  {meta.icon(16)}
+                  {meta.label}, {level.strength}
+                </span>
+                <span className="text-sm font-semibold">{level.blurb}</span>
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+    </Modal>
   );
 }
 

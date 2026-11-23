@@ -6,6 +6,8 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import type { BuiltinMaterialType, MaterialDef, MaterialType } from '../types/blueprint';
 import { getMaterialDef, isBuiltinMaterial } from '../types/blueprint';
+import { intToHex } from '../utils/color';
+import { mulberry32 } from '../utils/rng';
 
 const BLOCK_SIZE = 1.96;
 const BLOCK_RADIUS = 0.22;
@@ -39,20 +41,6 @@ const TEXTURE_SEEDS: Record<BuiltinMaterialType, number> = {
 };
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
-
-/** Small deterministic PRNG so every texture looks identical on every run. */
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-const hex = (color: number) => `#${color.toString(16).padStart(6, '0')}`;
 
 type Painter = (g: CanvasRenderingContext2D, rnd: () => number, base: string) => void;
 
@@ -240,7 +228,7 @@ function hashString(str: string): number {
 function paintCustomTexture(g: CanvasRenderingContext2D, def: MaterialDef) {
   const S = TEXTURE_SIZE;
   const rnd = mulberry32(hashString(def.id));
-  g.fillStyle = hex(def.color);
+  g.fillStyle = intToHex(def.color);
   g.fillRect(0, 0, S, S);
   for (let i = 0; i < 120; i++) {
     g.fillStyle = rnd() < 0.5 ? 'rgba(255,255,255,0.1)' : 'rgba(15,23,42,0.1)';
@@ -341,7 +329,7 @@ export class ProceduralAssets {
     if (!g) return null;
     const def = getMaterialDef(type, this.customDefs);
     if (isBuiltinMaterial(type)) {
-      PAINTERS[type](g, mulberry32(TEXTURE_SEEDS[type]), hex(def.color));
+      PAINTERS[type](g, mulberry32(TEXTURE_SEEDS[type]), intToHex(def.color));
     } else {
       paintCustomTexture(g, def);
     }

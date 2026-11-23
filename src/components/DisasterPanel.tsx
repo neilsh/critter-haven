@@ -1,41 +1,13 @@
-import {
-  Activity,
-  CloudHail,
-  Flame,
-  Orbit,
-  Play,
-  RotateCcw,
-  Snowflake,
-  Sparkles,
-  Swords,
-  Waves,
-  Wind,
-} from 'lucide-react';
-import type { ReactNode } from 'react';
+import { Play, RotateCcw, Sparkles } from 'lucide-react';
 import { useMods } from '../mods/modStore';
 import { useUIState } from '../state/store';
-import {
-  DISASTER_ORDER,
-  DISASTER_SECONDS,
-  STRENGTH_ORDER,
-  type BuiltinDisasterType,
-  type Strength,
-} from '../types/blueprint';
+import { DISASTER_ORDER, DISASTER_SECONDS, STRENGTH_ORDER, type Strength } from '../types/blueprint';
 import type { GameActions } from '../types/ui';
+import { intToHex } from '../utils/color';
 import { Chip } from './Chip';
+import { DISASTER_META } from './disasterMeta';
 
 const STRENGTHS: Record<Strength, string> = { gentle: 'Gentle', medium: 'Medium', strong: 'Strong' };
-
-const DISASTERS: Record<BuiltinDisasterType, { label: string; icon: ReactNode }> = {
-  earthquake: { label: 'Quake', icon: <Activity size={22} /> },
-  hurricane: { label: 'Wind', icon: <Wind size={22} /> },
-  flood: { label: 'Flood', icon: <Waves size={22} /> },
-  hail: { label: 'Hail', icon: <CloudHail size={22} /> },
-  fire_tornado: { label: 'Fire', icon: <Flame size={22} /> },
-  snow_storm: { label: 'Snow', icon: <Snowflake size={22} /> },
-  raid: { label: 'Raid', icon: <Swords size={22} /> },
-  meteor: { label: 'Meteor', icon: <Orbit size={22} /> },
-};
 
 /** Disaster picker, the Test/Rewind button and the countdown. */
 export function DisasterPanel({ actions }: { actions: GameActions }) {
@@ -62,8 +34,8 @@ export function DisasterPanel({ actions }: { actions: GameActions }) {
           <Chip
             key={d}
             testId={`disaster-${d}`}
-            label={DISASTERS[d].label}
-            icon={DISASTERS[d].icon}
+            label={DISASTER_META[d].shortLabel}
+            icon={DISASTER_META[d].icon(22)}
             active={s.disaster === d}
             disabled={!canPick}
             onClick={() => actions.setDisaster(d)}
@@ -75,7 +47,7 @@ export function DisasterPanel({ actions }: { actions: GameActions }) {
               key={d.id}
               testId={`disaster-${d.id}`}
               label={d.label}
-              icon={<Sparkles size={22} style={{ color: `#${d.color.toString(16).padStart(6, '0')}` }} />}
+              icon={<Sparkles size={22} style={{ color: intToHex(d.color) }} />}
               active={s.disaster === d.id}
               disabled={!canPick}
               onClick={() => actions.setDisaster(d.id)}
