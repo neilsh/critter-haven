@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import { BASE_MATERIALS, DEFAULT_STRENGTH, DISASTER_SECONDS } from '../types/blueprint';
+import { BASE_MATERIALS, BASE_PRESETS, DEFAULT_STRENGTH, DISASTER_SECONDS } from '../types/blueprint';
 import type { UIState } from '../types/ui';
 
 type Listener = () => void;
@@ -7,6 +7,14 @@ type Listener = () => void;
 /** Tiny subscribable store: the only bridge between the engine and React. */
 class UIStore {
   private state: UIState = {
+    playMode: 'creative',
+    menuOpen: true,
+    hasStarted: false,
+    survivalWave: 1,
+    survivalBestWave: 0,
+    survivalOver: false,
+    survivalFailReason: null,
+    survivalLastReward: 0,
     tool: 'block',
     material: 'wood',
     mirrorX: false,
@@ -21,11 +29,16 @@ class UIStore {
     unlocked: [],
     points: 0,
     unlockedMaterials: [...BASE_MATERIALS],
+    unlockedPresets: [...BASE_PRESETS],
+    unlockedGear: [],
+    equippedArmor: null,
+    equippedWeapon: null,
     firstBrokenId: null,
     muted: false,
     canUndo: false,
     azimuth: 0,
-    firstPerson: false,
+    firstPerson: true,
+    gamepadConnected: false,
     playerHp: 100,
     playerMaxHp: 100,
     damageFlash: 0,

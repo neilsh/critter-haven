@@ -8,16 +8,18 @@
  *
  * The HUD root ignores pointer events so the 3D view stays draggable everywhere except on the cards.
  */
-import { Heart } from 'lucide-react';
+import { Crosshair, Heart, Menu, Shield, Sparkles } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useLevelInfo } from '../levels/levelStore';
 import { useUIState } from '../state/store';
+import { ARMORS, WEAPONS } from '../types/gear';
 import type { GameActions } from '../types/ui';
 import { Banners } from './Banners';
 import { BuildPanel } from './BuildPanel';
 import { CameraPanel } from './CameraPanel';
 import { DisasterPanel } from './DisasterPanel';
 import { LevelPanel } from './LevelPanel';
+import { MainMenu } from './MainMenu';
 import { ModsPanel } from './ModsPanel';
 import { ShopPanel } from './ShopPanel';
 
@@ -25,6 +27,8 @@ export function HUD({ actions }: { actions: GameActions }) {
   const s = useUIState();
   const info = useLevelInfo();
   const [clearedFlash, setClearedFlash] = useState(0);
+  const [levelsOpen, setLevelsOpen] = useState(false);
+  const [shopOpen, setShopOpen] = useState(false);
   const flashing = s.damageFlash > clearedFlash;
 
   useEffect(() => {
@@ -33,6 +37,22 @@ export function HUD({ actions }: { actions: GameActions }) {
     return () => window.clearTimeout(id);
   }, [s.damageFlash, clearedFlash]);
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (levelsOpen || shopOpen || document.querySelector('[role="dialog"]')) return;
+      if (s.menuOpen) {
+        if (s.hasStarted) actions.resumeGame();
+      } else {
+        actions.openMenu();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [actions, levelsOpen, shopOpen, s.menuOpen, s.hasStarted]);
+
+  const isSurvival = s.playMode === 'survival' && s.levelId === null;
+  const creativeSandbox = s.playMode === 'creative' && s.levelId === null;
   const hpPct = Math.max(0, Math.min(100, (s.playerHp / s.playerMaxHp) * 100));
   const hpColor = hpPct > 60 ? 'bg-emerald-500' : hpPct > 30 ? 'bg-amber-400' : 'bg-rose-500';
 
@@ -45,23 +65,67 @@ export function HUD({ actions }: { actions: GameActions }) {
         />
       )}
 
-      <div className="absolute left-2 top-2">
+      {s.firstPerson && !s.menuOpen && (
+        <div
+          data-testid="fp-crosshair"
+          aria-hidden="true"
+          className="pointer-events-none fixed inset-0 flex items-center justify-center"
+        >
+          <div className="relative flex size-6 items-center justify-center">
+            <span className="h-0.5 w-5 rounded-full bg-white/90 shadow" />
+            <span className="absolute h-5 w-0.5 rounded-full bg-white/90 shadow" />
+            <span className="absolute size-2 rounded-full border-2 border-amber-300" />
+          </div>
+        </div>
+      )}
+
+      <div className="absolute left-2 top-16">
         <BuildPanel actions={actions} />
       </div>
 
-      <div className="absolute inset-x-2 top-2 flex justify-center">
+      <div className="absolute inset-x-2 top-2 flex flex-wrap items-start justify-center gap-2">
+        <button
+          type="button"
+          data-testid="menu-open"
+          onClick={() => actions.openMenu()}
+          className="pointer-events-auto flex min-h-11 items-center gap-1.5 rounded-2xl bg-white/90 px-3.5 text-sm font-extrabold shadow-md backdrop-blur active:scale-95"
+        >
+          <Menu size={18} aria-hidden="true" />
+          <span>Menu</span>
+        </button>
+
+        <span
+          data-testid="mode-badge"
+          className={`flex min-h-11 items-center gap-1.5 rounded-2xl px-3.5 text-xs font-black shadow-md backdrop-blur ${
+            isSurvival
+              ? 'bg-rose-500 text-white'
+              : s.levelId !== null
+                ? 'bg-sky-600 text-white'
+                : 'bg-amber-300 text-amber-950'
+          }`}
+        >
+          {isSurvival
+            ? `Survival · Wave ${s.survivalWave}${s.survivalBestWave > 0 ? ` · Best ${s.survivalBestWave}` : ''}`
+            : s.levelId !== null
+              ? 'Challenge'
+              : 'Creative'}
+        </span>
+
         <LevelPanel
           actions={actions}
+          open={levelsOpen}
+          onOpenChange={setLevelsOpen}
+          hideButton={isSurvival}
           extra={
             <>
-              <ShopPanel actions={actions} />
-              <ModsPanel actions={actions} />
+              <ShopPanel actions={actions} open={shopOpen} onOpenChange={setShopOpen} />
+              {!isSurvival && <ModsPanel actions={actions} />}
             </>
           }
         />
       </div>
 
-      <div className="absolute right-2 top-2 sm:top-24">
+      <div className="absolute right-2 top-16">
         <CameraPanel actions={actions} />
       </div>
 
@@ -76,27 +140,70 @@ export function HUD({ actions }: { actions: GameActions }) {
             {info.notice}
           </p>
         )}
-        <Banners />
+        <Banners actions={actions} />
         {s.firstPerson && (
           <div
             data-testid="player-hp"
             className="flex flex-wrap items-center gap-3 rounded-2xl bg-white/90 px-3.5 py-2 text-xs font-extrabold shadow-lg backdrop-blur"
           >
-            <span className="flex items-center gap-1.5 text-sm font-black">
-              <Heart size={18} aria-hidden="true" className="fill-rose-500 text-rose-500" />
-              HP {Math.ceil(s.playerHp)} / {s.playerMaxHp}
+            {creativeSandbox ? (
+              <span
+                data-testid="creative-invincible"
+                className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1 text-sm font-black text-emerald-950"
+              >
+                <Sparkles size={16} aria-hidden="true" className="text-amber-500" />
+                Creative · Invincible
+              </span>
+            ) : (
+              <>
+                <span className="flex items-center gap-1.5 text-sm font-black">
+                  <Heart size={18} aria-hidden="true" className="fill-rose-500 text-rose-500" />
+                  HP {Math.ceil(s.playerHp)} / {s.playerMaxHp}
+                </span>
+                <div className="h-3 w-36 overflow-hidden rounded-full bg-sky-100 shadow-inner">
+                  <div
+                    className={`h-full transition-all duration-150 ${hpColor}`}
+                    style={{ width: `${hpPct}%` }}
+                  />
+                </div>
+              </>
+            )}
+            {s.equippedArmor && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-sky-100 px-2.5 py-0.5 text-sky-900">
+                <Shield size={13} aria-hidden="true" />
+                {ARMORS[s.equippedArmor].label}
+              </span>
+            )}
+            {s.equippedWeapon && (
+              <button
+                type="button"
+                data-testid="fp-fire-weapon"
+                onClick={() => actions.fireWeapon()}
+                className="pointer-events-auto inline-flex items-center gap-1 rounded-full bg-amber-300 px-2.5 py-0.5 font-black text-amber-950 shadow-sm hover:bg-amber-200 active:scale-95"
+              >
+                <Crosshair size={13} aria-hidden="true" />
+                {WEAPONS[s.equippedWeapon].label} · Fire (F)
+              </button>
+            )}
+            <span className="text-sky-700">
+              {s.gamepadConnected
+                ? s.mode === 'build'
+                  ? 'L-Stick move · R-Stick look · A jump · RT build · LT erase · X tool · LB/RB mat · Start test'
+                  : `L-Stick move · R-Stick look · A jump${s.equippedWeapon ? ' · RT/X fire' : ''} · B rewind`
+                : s.mode === 'build'
+                  ? `WASD move · Space jump · Drag look · Click build${s.equippedWeapon ? ' · F fire' : ''}`
+                  : `WASD move · Space jump · Drag look${s.equippedWeapon ? ' · Click/F fire' : ''}`}
             </span>
-            <div className="h-3 w-36 overflow-hidden rounded-full bg-sky-100 shadow-inner">
-              <div
-                className={`h-full transition-all duration-150 ${hpColor}`}
-                style={{ width: `${hpPct}%` }}
-              />
-            </div>
-            <span className="text-sky-700">WASD move · Space jump · Drag to look</span>
           </div>
         )}
         <DisasterPanel actions={actions} />
       </div>
+
+      <MainMenu
+        actions={actions}
+        onOpenChallenges={() => setLevelsOpen(true)}
+        onOpenShop={() => setShopOpen(true)}
+      />
     </div>
   );
 }

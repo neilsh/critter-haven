@@ -115,11 +115,13 @@ export class BuildController {
   private readonly unlisten: Array<() => void> = [];
   /** Which graph piece each handle renders. */
   private readonly pieces = new WeakMap<PieceHandle, PieceInfo>();
+  private readonly openDoors = new Set<string>();
   private readonly blockBatches: InstancedPieces;
   private readonly strutBatches: InstancedPieces;
   /** Scene before-render hook that was installed before ours; ours chains to it and restores it. */
   private readonly prevBeforeRender: THREE.Object3D['onBeforeRender'];
   private readonly beforeRender: THREE.Object3D['onBeforeRender'];
+  private crosshairMode = false;
   private time = 0;
 
   constructor(
@@ -271,11 +273,124 @@ export class BuildController {
     this.updatePreview();
   }
 
+  /** Enables center-screen crosshair raycasting and disables pointer-coordinate building. */
+  setCrosshairMode(on: boolean): void {
+    this.crosshairMode = on;
+    this.cancelDrag();
+    this.updatePreview();
+  }
+
+  hasActiveBrace(): boolean {
+    return this.braceStart !== null;
+  }
+
+  isDoorOpen(id: string): boolean {
+    return this.openDoors.has(id);
+  }
+
+  getOpenDoorIds(): ReadonlySet<string> {
+    return this.openDoors;
+  }
+
+  toggleDoor(id: string): boolean {
+    const b = this.blocksById.get(id);
+    const h = this.meshes.blocks.get(id);
+    if (!b || !h || b.material !== 'door') return false;
+    if (this.openDoors.has(id)) this.openDoors.delete(id);
+    else this.openDoors.add(id);
+    this.placeBlockMesh(h, b.cell, b.id);
+    this.flushInstances();
+    this.audio.playClack();
+    this.updatePreview();
+    this.notify();
+    return true;
+  }
+
+  toggleDoorAtCrosshair(maxDistance = Infinity): boolean {
+    if (!this.setCenterRay()) return false;
+    const door = this.pickDoorAtRay(maxDistance);
+    return door ? this.toggleDoor(door.id) : false;
+  }
+
+  cancelBrace(): void {
+    if (!this.braceStart) return;
+    this.braceStart = null;
+    this.updatePreview();
+  }
+
+  /** Applies the active tool at the center crosshair ray (used in First-Person mode). */
+  applyToolAtCrosshair(): boolean {
+    if (!this.enabled) return false;
+    let ok = false;
+    switch (this.tool) {
+      case 'block': {
+        if (!this.setCenterRay()) return false;
+        const door = this.pickDoorAtRay();
+        if (door) return this.toggleDoor(door.id);
+        const cell = this.pickPlacementCell();
+        if (cell && this.placeBlockWithMirror(cell)) {
+          this.audio.playClack();
+          ok = true;
+        }
+        break;
+      }
+      case 'brace': {
+        const corner = this.pickCenterCorner();
+        if (!corner) return false;
+        if (!this.braceStart) {
+          this.braceStart = corner;
+          ok = true;
+        } else if (!sameVec(this.braceStart, corner)) {
+          const start = this.braceStart;
+          this.braceStart = null;
+          ok = this.placeBraceWithMirror(start, corner);
+        }
+        break;
+      }
+      case 'paint': {
+        if (!this.setCenterRay()) return false;
+        const m = this.pickPiece(['block', 'strut']);
+        if (m && this.paintWithMirror(m)) {
+          this.audio.playClack();
+          ok = true;
+        }
+        break;
+      }
+      case 'erase': {
+        if (!this.setCenterRay()) return false;
+        const m = this.pickPiece(['block', 'strut']);
+        if (m && this.eraseWithMirror(m)) {
+          this.audio.playClack();
+          ok = true;
+        }
+        break;
+      }
+    }
+    this.updatePreview();
+    return ok;
+  }
+
+  /** Cancels an active brace drag or erases the piece aimed at by the center crosshair. */
+  eraseAtCrosshair(): boolean {
+    if (!this.enabled) return false;
+    if (this.braceStart) {
+      this.braceStart = null;
+      this.updatePreview();
+      return true;
+    }
+    if (!this.setCenterRay()) return false;
+    const m = this.pickPiece(['block', 'strut']);
+    if (!m || !this.eraseWithMirror(m)) return false;
+    this.audio.playClack();
+    this.updatePreview();
+    return true;
+  }
+
   /** Snap every mesh back to its exact blueprint transform and clear tints (rewind). */
   resetMeshes(): void {
     for (const b of this.graph.blocks) {
       const m = this.meshes.blocks.get(b.id);
-      if (m) this.placeBlockMesh(m, b.cell);
+      if (m) this.placeBlockMesh(m, b.cell, b.id);
     }
     for (const s of this.graph.struts) {
       const m = this.meshes.struts.get(s.id);
@@ -421,8 +536,13 @@ export class BuildController {
         this.setEmissive(h, 0x000000);
       }
     };
+    for (const id of this.openDoors) {
+      if (this.blocksById.get(id)?.material !== 'door') {
+        this.openDoors.delete(id);
+      }
+    }
     sync(this.graph.blocks, this.meshes.blocks, this.blockBatches, 'block', (h, b) =>
-      this.placeBlockMesh(h, b.cell),
+      this.placeBlockMesh(h, b.cell, b.id),
     );
     sync(this.graph.struts, this.meshes.struts, this.strutBatches, 'strut', (h, s) =>
       this.placeStrutMesh(h, s.a, s.b),
@@ -436,8 +556,15 @@ export class BuildController {
     this.strutBatches.flush();
   }
 
-  private placeBlockMesh(m: PieceHandle, cell: Vec3): void {
-    m.position.set(...cellToWorld(cell));
+  private placeBlockMesh(m: PieceHandle, cell: Vec3, id?: string): void {
+    const [wx, wy, wz] = cellToWorld(cell);
+    if (id && this.openDoors.has(id)) {
+      m.position.set(wx - CELL_SIZE * 0.39, wy, wz);
+      m.quaternion.identity();
+      m.scale.set(0.22, 1, 0.96);
+      return;
+    }
+    m.position.set(wx, wy, wz);
     m.quaternion.identity();
     m.scale.set(1, 1, 1);
   }
@@ -468,6 +595,7 @@ export class BuildController {
 
   private onFrame(dt: number): void {
     this.time += dt;
+    if (this.crosshairMode && this.enabled) this.updatePreview();
     if (!this.highlightId) return;
     const m = this.findPiece(this.highlightId);
     if (!m) return;
@@ -494,12 +622,40 @@ export class BuildController {
     const rect = this.dom?.getBoundingClientRect();
     if (!rect?.width || !rect.height) return false;
     this.ndc.set(((x - rect.left) / rect.width) * 2 - 1, -((y - rect.top) / rect.height) * 2 + 1);
+    return this.aimRayFromNdc();
+  }
+
+  private setCenterRay(): boolean {
+    this.ndc.set(0, 0);
+    return this.aimRayFromNdc();
+  }
+
+  private aimRayFromNdc(): boolean {
     this.sceneMgr.camera.updateMatrixWorld();
     // Meshes added since the last render have a stale matrixWorld, which raycasting reads.
     this.sceneMgr.buildRoot.updateMatrixWorld(true);
     this.sceneMgr.islandTop.updateMatrixWorld();
     this.raycaster.setFromCamera(this.ndc, this.sceneMgr.camera);
     return true;
+  }
+
+  private pickCenterCorner(): Vec3 | null {
+    const cam = this.sceneMgr.camera;
+    cam.updateMatrixWorld();
+    const v = this.tmpVec;
+    let best: Vec3 | null = null;
+    let bestScore = Infinity;
+    for (const k of this.corners.values()) {
+      v.set(...cornerToWorld(k)).project(cam);
+      if (v.z > 1 || v.z < -1) continue;
+      const d = Math.hypot(v.x, v.y);
+      const score = d + v.z * 0.1;
+      if (d <= 0.12 && score < bestScore) {
+        bestScore = score;
+        best = k;
+      }
+    }
+    return best;
   }
 
   /** Nearest snap corner to the pointer in screen space, or null. */
@@ -574,8 +730,20 @@ export class BuildController {
     return null;
   }
 
+  private pickDoorAtRay(maxDistance = Infinity): { id: string; handle: PieceHandle } | null {
+    const hits = this.raycaster.intersectObjects(this.blockBatches.meshes(), false);
+    const hit = hits[0];
+    if (!hit || hit.distance > maxDistance) return null;
+    const handle = this.blockBatches.handleAt(hit);
+    const info = handle && this.pieces.get(handle);
+    if (!handle || !info || info.kind !== 'block') return null;
+    const block = this.blocksById.get(info.id);
+    if (!block || block.material !== 'door') return null;
+    return { id: block.id, handle };
+  }
+
   private onPointerDown(e: PointerEvent): void {
-    if (!this.enabled || e.button > 0) return;
+    if (this.crosshairMode || !this.enabled || e.button > 0) return;
     // A second finger means pinch/orbit, never a click or brace: drop whatever the first one started.
     if (!e.isPrimary) return this.cancelDrag();
     this.pointer = { x: e.clientX, y: e.clientY };
@@ -598,18 +766,19 @@ export class BuildController {
   }
 
   private onPointerMove(e: PointerEvent): void {
-    if (!this.enabled || !e.isPrimary) return;
+    if (this.crosshairMode || !this.enabled || !e.isPrimary) return;
     this.pointer = { x: e.clientX, y: e.clientY };
     this.updatePreview();
   }
 
   private onPointerLeave(): void {
+    if (this.crosshairMode) return;
     this.pointer = null;
     this.updatePreview();
   }
 
   private onPointerUp(e: PointerEvent): void {
-    if (!e.isPrimary) return;
+    if (this.crosshairMode || !e.isPrimary) return;
     const pressed = this.pressed;
     this.releaseCapture();
     this.pressed = null;
@@ -626,6 +795,11 @@ export class BuildController {
     if (moved > CLICK_SLOP_PX || !this.setRay(e.clientX, e.clientY)) return;
     switch (this.tool) {
       case 'block': {
+        const door = this.pickDoorAtRay();
+        if (door) {
+          this.toggleDoor(door.id);
+          break;
+        }
         const cell = this.pickPlacementCell();
         if (cell && this.placeBlockWithMirror(cell)) this.audio.playClack();
         break;
@@ -729,11 +903,21 @@ export class BuildController {
         this.setEmissive(this.hoverPiece, 0x000000);
       this.hoverPiece = null;
     }
-    if (!this.enabled || !this.dom || !this.pointer) return;
-    const { x, y } = this.pointer;
+    if (!this.enabled || (!this.crosshairMode && (!this.dom || !this.pointer))) return;
 
     if (this.tool === 'block') {
-      if (!this.setRay(x, y)) return;
+      const rayOk = this.crosshairMode
+        ? this.setCenterRay()
+        : this.pointer
+          ? this.setRay(this.pointer.x, this.pointer.y)
+          : false;
+      if (!rayOk) return;
+      const door = this.pickDoorAtRay();
+      if (door) {
+        this.hoverPiece = door.handle;
+        this.setEmissive(door.handle, 0x443311);
+        return;
+      }
       const cell = this.pickPlacementCell();
       if (!cell) return;
       const cells = [cell];
@@ -753,7 +937,11 @@ export class BuildController {
       this.levelGrid.position.y = Math.max(cell[1] * CELL_SIZE, 0.02);
       this.levelGrid.visible = cellInBounds(cell);
     } else if (this.tool === 'brace') {
-      const hover = this.pickCorner(x, y);
+      const hover = this.crosshairMode
+        ? this.pickCenterCorner()
+        : this.pointer
+          ? this.pickCorner(this.pointer.x, this.pointer.y)
+          : null;
       const start = this.braceStart;
       if (start) {
         const end = hover ?? start;
@@ -782,7 +970,12 @@ export class BuildController {
         this.cornerMarker.visible = true;
       }
     } else {
-      if (!this.setRay(x, y)) return;
+      const rayOk = this.crosshairMode
+        ? this.setCenterRay()
+        : this.pointer
+          ? this.setRay(this.pointer.x, this.pointer.y)
+          : false;
+      if (!rayOk) return;
       const m = this.pickPiece(['block', 'strut']);
       if (!m) return;
       this.hoverPiece = m;

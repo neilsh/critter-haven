@@ -150,4 +150,71 @@ describe('FirstPersonController', () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it('supports jumpMultiplier, eye/look vectors, and firing with KeyF', () => {
+    const winTarget = new EventTarget();
+    vi.stubGlobal('window', winTarget);
+    try {
+      const cam = new THREE.PerspectiveCamera(45, 1, 0.1, 200);
+      const fp = new FirstPersonController(cam);
+      fp.spawn([]);
+      fp.setEnabled(true);
+      fp.yaw = 0;
+      fp.pitch = 0;
+      expect(fp.getEyePosition()).toEqual([fp.pos.x, EYE_HEIGHT, fp.pos.z]);
+      const dir = fp.getLookDirection();
+      expect(dir[0]).toBeCloseTo(0);
+      expect(dir[1]).toBeCloseTo(0);
+      expect(dir[2]).toBeCloseTo(-1);
+
+      let fired = 0;
+      fp.setFireHandler(() => fired++);
+      winTarget.dispatchEvent(Object.assign(new Event('keydown'), { code: 'KeyF', repeat: false }));
+      expect(fired).toBe(1);
+
+      fp.setKey('Space', true);
+      fp.update(1 / 60, [], 9.81, 1);
+      const normalVy = fp.vy;
+
+      fp.pos.y = 0;
+      fp.vy = 0;
+      fp.grounded = true;
+      fp.update(1 / 60, [], 9.81, 1.35);
+      expect(fp.vy).toBeGreaterThan(normalVy);
+      fp.dispose();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('moves proportionally with analog gamepad input, jumps, and rotates with lookAngles', () => {
+    const cam = new THREE.PerspectiveCamera(45, 1, 0.1, 200);
+    const fp = new FirstPersonController(cam);
+    fp.spawn([]);
+    fp.setEnabled(true);
+    fp.yaw = 0;
+    fp.pitch = 0;
+
+    // Half-tilt forward moves at half speed (and jumps via gamepad A)
+    const startZ = fp.pos.z;
+    fp.setGamepadInput(0, 0.5, false);
+    fp.update(1 / 60, []);
+    const halfStep = startZ - fp.pos.z;
+    expect(halfStep).toBeGreaterThan(0);
+
+    const midZ = fp.pos.z;
+    fp.setGamepadInput(0, 1, true);
+    fp.update(1 / 60, []);
+    const fullStep = midZ - fp.pos.z;
+    expect(fullStep).toBeCloseTo(halfStep * 2);
+    expect(fp.grounded).toBe(false);
+    expect(fp.vy).toBeGreaterThan(0);
+
+    // lookAngles updates yaw and clamps pitch
+    fp.lookAngles(0.5, -100);
+    expect(fp.yaw).toBeCloseTo(-0.5);
+    expect(fp.pitch).toBeLessThan(Math.PI / 2);
+    expect(cam.rotation.y).toBeCloseTo(-0.5);
+    fp.dispose();
+  });
 });

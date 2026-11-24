@@ -50,7 +50,7 @@ export function Modal({
   }, []);
 
   return (
-    <div className="pointer-events-auto fixed inset-0 z-20 flex items-center justify-center p-3">
+    <div className="pointer-events-auto fixed inset-0 z-30 flex items-center justify-center p-3">
       <button
         type="button"
         tabIndex={-1}

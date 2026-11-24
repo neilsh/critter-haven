@@ -2,15 +2,19 @@ import type { ReactNode } from 'react';
 import {
   Box,
   Building2,
+  Castle,
   Eraser,
   FlipHorizontal2,
   House,
   Lock,
   Paintbrush,
+  Shield,
+  Ship,
   Square,
   Trash2,
   Undo2,
   Waypoints,
+  Zap,
 } from 'lucide-react';
 import { isMaterialAllowed } from '../levels/constraints';
 import { getLevel } from '../levels/levels';
@@ -19,6 +23,8 @@ import { useUIState } from '../state/store';
 import {
   BASE_MATERIALS,
   MATERIALS,
+  PRESET_DEFS,
+  PRESET_ORDER,
   UNLOCKABLE_MATERIALS,
   type BuiltinMaterialType,
   type PresetName,
@@ -34,11 +40,15 @@ const TOOLS: Array<{ id: ToolType; label: string; icon: ReactNode }> = [
   { id: 'erase', label: 'Erase', icon: <Eraser size={22} /> },
 ];
 
-const PRESETS: Array<{ id: PresetName; label: string; icon: ReactNode }> = [
-  { id: 'empty', label: 'Empty', icon: <Square size={20} /> },
-  { id: 'house', label: 'House', icon: <House size={20} /> },
-  { id: 'tower', label: 'Tower', icon: <Building2 size={20} /> },
-];
+const PRESET_ICONS: Record<PresetName, ReactNode> = {
+  empty: <Square size={20} />,
+  house: <House size={20} />,
+  tower: <Building2 size={20} />,
+  boat: <Ship size={20} />,
+  base: <Shield size={20} />,
+  laser_tower: <Zap size={20} />,
+  fortress: <Castle size={20} />,
+};
 
 /** Build tools, materials, mirror/undo/clear and starter presets. Reads the UI store only. */
 export function BuildPanel({ actions }: { actions: GameActions }) {
@@ -46,10 +56,11 @@ export function BuildPanel({ actions }: { actions: GameActions }) {
   const { active } = useMods();
   // A challenge level greys out materials it does not allow and the presets (they would skip its limits).
   const level = s.levelId ? getLevel(s.levelId) : undefined;
+  const creativeSandbox = s.hasStarted && s.playMode === 'creative' && s.levelId === null;
   return (
     <section
       aria-label="Build tools"
-      className="pointer-events-auto flex w-full max-w-[calc(100%-6rem)] flex-col gap-2 rounded-3xl bg-sky-100/90 p-2.5 shadow-xl backdrop-blur sm:max-w-md"
+      className="pointer-events-auto flex max-h-[calc(100vh-13rem)] w-full max-w-[calc(100%-6rem)] flex-col gap-2 overflow-y-auto rounded-3xl bg-sky-100/90 p-2.5 shadow-xl backdrop-blur sm:max-w-md"
     >
       <div className="flex flex-wrap gap-2">
         {TOOLS.map((t) => (
@@ -100,7 +111,7 @@ export function BuildPanel({ actions }: { actions: GameActions }) {
 
       <div className="flex flex-wrap gap-2" role="group" aria-label="Tech blocks">
         {UNLOCKABLE_MATERIALS.map((m: BuiltinMaterialType) => {
-          const unlocked = s.unlockedMaterials.includes(m);
+          const unlocked = creativeSandbox || s.unlockedMaterials.includes(m);
           const allowed = isMaterialAllowed(level?.constraints, m);
           return (
             <Chip
@@ -116,7 +127,7 @@ export function BuildPanel({ actions }: { actions: GameActions }) {
         })}
       </div>
 
-      {level === undefined && active.blocks.length > 0 && (
+      {level === undefined && s.playMode !== 'survival' && active.blocks.length > 0 && (
         <div className="flex flex-wrap gap-2" role="group" aria-label="Mod blocks">
           {active.blocks.map((b) => (
             <Chip
@@ -132,16 +143,19 @@ export function BuildPanel({ actions }: { actions: GameActions }) {
       )}
 
       <div className="flex flex-wrap gap-2" role="group" aria-label="Starter shapes">
-        {PRESETS.map((p) => (
-          <Chip
-            key={p.id}
-            testId={`preset-${p.id}`}
-            label={p.label}
-            icon={p.icon}
-            disabled={level !== undefined}
-            onClick={() => actions.loadPreset(p.id)}
-          />
-        ))}
+        {PRESET_ORDER.map((p) => {
+          const unlocked = creativeSandbox || s.unlockedPresets.includes(p);
+          return (
+            <Chip
+              key={p}
+              testId={`preset-${p}`}
+              label={PRESET_DEFS[p].label}
+              icon={unlocked ? PRESET_ICONS[p] : <Lock size={18} />}
+              disabled={!unlocked || level !== undefined}
+              onClick={() => actions.loadPreset(p)}
+            />
+          );
+        })}
       </div>
     </section>
   );

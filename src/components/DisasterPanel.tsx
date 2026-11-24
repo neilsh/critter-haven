@@ -14,15 +14,28 @@ export function DisasterPanel({ actions }: { actions: GameActions }) {
   const s = useUIState();
   const { active } = useMods();
   const building = s.mode === 'build';
-  // A challenge level fixes its own disaster and strength.
-  const canPick = building && s.levelId === null;
-  const idleSeconds = s.levelId === null ? active.durationSeconds : DISASTER_SECONDS;
+  const isSurvival = s.playMode === 'survival' && s.levelId === null;
+  // Challenge levels fix their own disaster; Survival picks waves automatically.
+  const canPick = building && s.levelId === null && !isSurvival;
+  const idleSeconds = s.levelId === null && !isSurvival ? active.durationSeconds : DISASTER_SECONDS;
   // Idle shows the full countdown; a finished run shows 0 instead of jumping back to 8.
   const seconds = building
     ? idleSeconds
     : s.mode === 'simulating'
       ? Math.max(0, Math.ceil(s.timeRemaining))
       : 0;
+  const actionLabel = isSurvival
+    ? s.survivalOver
+      ? 'Retry Wave 1'
+      : building
+        ? `Start Wave ${s.survivalWave}`
+        : s.mode === 'survived'
+          ? 'Next Wave'
+          : 'Rewind'
+    : building
+      ? 'Test it!'
+      : 'Rewind';
+  const isGoVariant = building || (isSurvival && (s.mode === 'survived' || s.survivalOver));
 
   return (
     <section
@@ -42,6 +55,7 @@ export function DisasterPanel({ actions }: { actions: GameActions }) {
           />
         ))}
         {s.levelId === null &&
+          !isSurvival &&
           active.disasters.map((d) => (
             <Chip
               key={d.id}
@@ -79,9 +93,9 @@ export function DisasterPanel({ actions }: { actions: GameActions }) {
         </span>
         <Chip
           testId="test-disaster"
-          label={building ? 'Test it!' : 'Rewind'}
-          icon={building ? <Play size={22} fill="currentColor" /> : <RotateCcw size={22} />}
-          variant={building ? 'go' : 'rewind'}
+          label={actionLabel}
+          icon={isGoVariant ? <Play size={22} fill="currentColor" /> : <RotateCcw size={22} />}
+          variant={isGoVariant ? 'go' : 'rewind'}
           onClick={() => actions.toggleDisaster()}
         />
       </div>

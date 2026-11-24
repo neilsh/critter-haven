@@ -172,23 +172,42 @@ function GoalCard({ level, actions }: { level: Level; actions: GameActions }) {
 }
 
 /** Level-select button and, during a challenge, the goal card. */
-export function LevelPanel({ actions, extra }: { actions: GameActions; extra?: ReactNode }) {
+export function LevelPanel({
+  actions,
+  extra,
+  open: controlledOpen,
+  onOpenChange,
+  hideButton = false,
+}: {
+  actions: GameActions;
+  extra?: ReactNode;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  hideButton?: boolean;
+}) {
   const ui = useUIState();
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlledOpen ?? internalOpen;
+  const setOpen = (next: boolean) => {
+    if (onOpenChange) onOpenChange(next);
+    else setInternalOpen(next);
+  };
   const level = ui.levelId ? getLevel(ui.levelId) : undefined;
 
   return (
     <div className="flex flex-col items-center gap-2">
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          data-testid="level-toggle"
-          onClick={() => setOpen(true)}
-          className="pointer-events-auto flex min-h-12 items-center gap-1.5 rounded-2xl bg-white/90 px-4 text-sm font-extrabold shadow-md backdrop-blur active:scale-95"
-        >
-          <MapIcon size={20} aria-hidden="true" />
-          {level ? 'Levels' : 'Challenges'}
-        </button>
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        {!hideButton && (
+          <button
+            type="button"
+            data-testid="level-toggle"
+            onClick={() => setOpen(true)}
+            className="pointer-events-auto flex min-h-11 items-center gap-1.5 rounded-2xl bg-white/90 px-3.5 text-sm font-extrabold shadow-md backdrop-blur active:scale-95"
+          >
+            <MapIcon size={20} aria-hidden="true" />
+            {level ? 'Levels' : 'Challenges'}
+          </button>
+        )}
         {extra}
       </div>
       {level && <GoalCard level={level} actions={actions} />}

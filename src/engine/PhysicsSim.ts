@@ -65,6 +65,7 @@ import {
   key,
 } from '../types/blueprint';
 import type { ModDisasterDef } from '../mods/mods';
+import type { WeaponDef } from '../types/gear';
 import { mulberry32 } from '../utils/rng';
 import type { MeshRegistry } from './BuildController';
 import { createProjectileMaterials, type Projectile } from './physics/projectiles';
@@ -80,12 +81,14 @@ import {
   type PhysicsEvents,
   type PhysicsTelemetry,
   type PlayerHitResult,
+  type PlayerProtection,
   type SimOptions,
+  type WeaponFireResult,
 } from './physics/tuning';
 import type { BlockRec, LaserEntry, Link, ShieldDome, StrutEnd, StrutRec } from './physics/types';
 
 export { PHYSICS_TUNING, loadRapier, starsFor };
-export type { PhysicsEvents, PlayerHitResult, SimOptions };
+export type { PhysicsEvents, PlayerHitResult, PlayerProtection, SimOptions, WeaponFireResult };
 export const makeRng = mulberry32;
 
 const T = PHYSICS_TUNING;
@@ -192,13 +195,39 @@ export class PhysicsSim {
   }
 
   /** Live world centers of all blocks in the active simulation. */
-  getBlockPositions(): Vec3[] {
-    return this.run?.blockPositions() ?? [];
+  getBlockPositions(excludeIds?: ReadonlySet<string>): Vec3[] {
+    return this.run?.blockPositions(excludeIds) ?? [];
+  }
+
+  /** Live world centers of active disaster projectiles. */
+  getProjectilePositions(): Vec3[] {
+    return this.run?.projectilePositions() ?? [];
   }
 
   /** Evaluates disaster & debris hits against a First-Person player at `feet`. */
-  checkPlayerDamage(feet: Vec3, dt: number): PlayerHitResult {
-    return this.run?.checkPlayerDamage(feet, dt) ?? { damage: 0, cause: null, impact: false };
+  checkPlayerDamage(feet: Vec3, dt: number, protection?: PlayerProtection): PlayerHitResult {
+    return (
+      this.run?.checkPlayerDamage(feet, dt, protection) ?? {
+        damage: 0,
+        cause: null,
+        impact: false,
+      }
+    );
+  }
+
+  /** Fires a First-Person weapon ray from `origin` along `dir`, damaging or destroying hazards. */
+  firePlayerWeapon(origin: Vec3, dir: Vec3, weapon: WeaponDef): WeaponFireResult {
+    if (this.run?.running) return this.run.firePlayerWeapon(origin, dir, weapon);
+    const len = Math.hypot(dir[0], dir[1], dir[2]);
+    const ux = len > 1e-6 ? dir[0] / len : 0;
+    const uy = len > 1e-6 ? dir[1] / len : 0;
+    const uz = len > 1e-6 ? dir[2] / len : -1;
+    const reach = Math.min(weapon.range, 20);
+    return {
+      hit: false,
+      hitPoint: [origin[0] + ux * reach, origin[1] + uy * reach, origin[2] + uz * reach],
+      destroyedCount: 0,
+    };
   }
 }
 
@@ -325,14 +354,27 @@ class SimRun {
     };
   }
 
-  blockPositions(): Vec3[] {
-    return this.blocks.map((b) => {
+  blockPositions(excludeIds?: ReadonlySet<string>): Vec3[] {
+    const out: Vec3[] = [];
+    for (const b of this.blocks) {
+      if (excludeIds?.has(b.data.id)) continue;
       const p = b.body.translation();
-      return [p.x, p.y, p.z];
-    });
+      out.push([p.x, p.y, p.z]);
+    }
+    return out;
   }
 
-  checkPlayerDamage(feet: Vec3, dt: number): PlayerHitResult {
+  projectilePositions(): Vec3[] {
+    const out: Vec3[] = [];
+    for (const proj of this.projectiles) {
+      if (proj.destroyed) continue;
+      const p = proj.body.translation();
+      out.push([p.x, p.y, p.z]);
+    }
+    return out;
+  }
+
+  checkPlayerDamage(feet: Vec3, dt: number, protection?: PlayerProtection): PlayerHitResult {
     if (!this.running) return { damage: 0, cause: null, impact: false };
     const safeDt = Math.max(0, dt);
     this.playerInvuln = Math.max(0, this.playerInvuln - safeDt);
@@ -346,7 +388,7 @@ class SimRun {
     let cause: string | null = null;
     let impact = false;
 
-    if (this.waterLevel > py + 1.45) {
+    if (!protection?.floodImmune && this.waterLevel > py + 1.45) {
       damage += T.player.drownDps * safeDt;
       cause = 'Swept by the flood!';
     }
@@ -400,7 +442,80 @@ class SimRun {
       }
     }
 
-    return { damage, cause, impact };
+    const mult = 1 - clamp01(protection?.damageReduction ?? 0);
+    return { damage: damage * mult, cause, impact };
+  }
+
+  firePlayerWeapon(origin: Vec3, dir: Vec3, weapon: WeaponDef): WeaponFireResult {
+    const len = Math.hypot(dir[0], dir[1], dir[2]);
+    const ux = len > 1e-6 ? dir[0] / len : 0;
+    const uy = len > 1e-6 ? dir[1] / len : 0;
+    const uz = len > 1e-6 ? dir[2] / len : -1;
+    const defaultReach = Math.min(weapon.range, 20);
+    const defaultPoint: Vec3 = [
+      origin[0] + ux * defaultReach,
+      origin[1] + uy * defaultReach,
+      origin[2] + uz * defaultReach,
+    ];
+    if (!this.running) return { hit: false, hitPoint: defaultPoint, destroyedCount: 0 };
+
+    let best: Projectile | null = null;
+    let bestAlong = weapon.range;
+    let bestPos: { x: number; y: number; z: number } | null = null;
+
+    for (const proj of this.projectiles) {
+      if (proj.destroyed) continue;
+      const pp = proj.body.translation();
+      const dx = pp.x - origin[0];
+      const dy = pp.y - origin[1];
+      const dz = pp.z - origin[2];
+      const along = dx * ux + dy * uy + dz * uz;
+      if (along <= 0 || along > weapon.range) continue;
+      const perp2 = Math.max(0, dx * dx + dy * dy + dz * dz - along * along);
+      const tol = Math.max(proj.radius + 1.4, along * 0.14);
+      if (perp2 <= tol * tol && along < bestAlong) {
+        best = proj;
+        bestAlong = along;
+        bestPos = pp;
+      }
+    }
+
+    if (!best || !bestPos) {
+      return { hit: false, hitPoint: defaultPoint, destroyedCount: 0 };
+    }
+
+    const hitPoint: Vec3 = [bestPos.x, bestPos.y, bestPos.z];
+    const targets: Projectile[] = [best];
+    if (weapon.splashRadius > 0) {
+      const r2 = weapon.splashRadius * weapon.splashRadius;
+      for (const proj of this.projectiles) {
+        if (proj === best || proj.destroyed) continue;
+        const pp = proj.body.translation();
+        const d2 = (pp.x - bestPos.x) ** 2 + (pp.y - bestPos.y) ** 2 + (pp.z - bestPos.z) ** 2;
+        if (d2 <= r2) targets.push(proj);
+      }
+    }
+
+    const ev = this.events();
+    let destroyedCount = 0;
+    for (const target of targets) {
+      target.hp -= weapon.damage;
+      if (target.hp <= 0) {
+        target.destroyed = true;
+        destroyedCount++;
+        const tp = target.body.translation();
+        this.effectsRoot?.remove(target.mesh);
+        this.world.removeRigidBody(target.body);
+        ev.onProjectileImpact?.(target.kind, tp.x, tp.y, tp.z);
+      } else {
+        target.mesh.scale.multiplyScalar(0.82);
+        const v = target.body.linvel();
+        target.body.setLinvel({ x: v.x * 0.7, y: v.y * 0.7, z: v.z * 0.7 }, true);
+      }
+    }
+    if (destroyedCount > 0) this.compactProjectiles();
+
+    return { hit: true, hitPoint, destroyedCount };
   }
 
   update(dtSeconds: number) {

@@ -45,6 +45,12 @@ export class FirstPersonController {
   private readonly keys = new Set<string>();
   private dragPointerId: number | null = null;
   private lastPointer = { x: 0, y: 0 };
+  private dragStart = { x: 0, y: 0 };
+  private dragMoved = 0;
+  private gpStrafe = 0;
+  private gpForward = 0;
+  private gpJump = false;
+  private fireHandler: ((source: 'click' | 'key') => void) | null = null;
   private readonly cleanups: Array<() => void> = [];
 
   constructor(
@@ -62,6 +68,9 @@ export class FirstPersonController {
           e.code === 'ArrowRight'
         ) {
           e.preventDefault();
+        }
+        if ((e.code === 'KeyF' || e.code === 'KeyE') && !e.repeat) {
+          this.fireHandler?.('key');
         }
         this.keys.add(e.code);
       };
@@ -86,6 +95,8 @@ export class FirstPersonController {
         if (!this.enabled || this.paused || !e.isPrimary || e.button !== 0) return;
         this.dragPointerId = e.pointerId;
         this.lastPointer = { x: e.clientX, y: e.clientY };
+        this.dragStart = { x: e.clientX, y: e.clientY };
+        this.dragMoved = 0;
         dom.setPointerCapture?.(e.pointerId);
       };
       const onPointerMove = (e: PointerEvent) => {
@@ -93,11 +104,17 @@ export class FirstPersonController {
         const dx = e.clientX - this.lastPointer.x;
         const dy = e.clientY - this.lastPointer.y;
         this.lastPointer = { x: e.clientX, y: e.clientY };
+        this.dragMoved = Math.max(
+          this.dragMoved,
+          Math.hypot(e.clientX - this.dragStart.x, e.clientY - this.dragStart.y),
+        );
         this.lookDelta(dx, dy);
       };
       const endDrag = (e: PointerEvent) => {
         if (this.dragPointerId !== e.pointerId) return;
+        const quickClick = e.type === 'pointerup' && this.enabled && !this.paused && this.dragMoved < 6;
         this.releaseDragCapture();
+        if (quickClick) this.fireHandler?.('click');
       };
       dom.addEventListener('pointerdown', onPointerDown);
       dom.addEventListener('pointermove', onPointerMove);
@@ -122,6 +139,9 @@ export class FirstPersonController {
 
   private clearInputState(): void {
     this.keys.clear();
+    this.gpStrafe = 0;
+    this.gpForward = 0;
+    this.gpJump = false;
     this.releaseDragCapture();
   }
 
@@ -151,9 +171,21 @@ export class FirstPersonController {
   }
 
   lookDelta(dx: number, dy: number): void {
-    this.yaw -= dx * LOOK_SENSITIVITY;
-    this.pitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, this.pitch - dy * LOOK_SENSITIVITY));
+    this.lookAngles(dx * LOOK_SENSITIVITY, dy * LOOK_SENSITIVITY);
+  }
+
+  /** Updates view yaw and pitch by radian deltas, clamping pitch and syncing camera if enabled. */
+  lookAngles(dYaw: number, dPitch: number): void {
+    this.yaw -= dYaw;
+    this.pitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, this.pitch - dPitch));
     if (this.enabled) this.syncCamera();
+  }
+
+  /** Supplies continuous analog gamepad movement (-1..1) and jump state for the next update tick. */
+  setGamepadInput(strafe: number, forward: number, jump: boolean): void {
+    this.gpStrafe = strafe;
+    this.gpForward = forward;
+    this.gpJump = jump;
   }
 
   /** Places the player at a clear spot on the island facing the village center. */
@@ -180,11 +212,24 @@ export class FirstPersonController {
     this.syncCamera();
   }
 
+  setFireHandler(handler: ((source: 'click' | 'key') => void) | null): void {
+    this.fireHandler = handler;
+  }
+
   getFeetPosition(): Vec3 {
     return [this.pos.x, this.pos.y, this.pos.z];
   }
 
-  update(dt: number, blockCenters: readonly Vec3[], gravity = 9.81): void {
+  getEyePosition(): Vec3 {
+    return [this.pos.x, this.pos.y + EYE_HEIGHT, this.pos.z];
+  }
+
+  getLookDirection(): Vec3 {
+    const cp = Math.cos(this.pitch);
+    return [-Math.sin(this.yaw) * cp, Math.sin(this.pitch), -Math.cos(this.yaw) * cp];
+  }
+
+  update(dt: number, blockCenters: readonly Vec3[], gravity = 9.81, jumpMultiplier = 1): void {
     if (!this.enabled) return;
     const stepDt = Math.min(Math.max(dt, 0), MAX_STEP_DT);
     if (stepDt <= 0) {
@@ -192,12 +237,14 @@ export class FirstPersonController {
       return;
     }
 
-    const fwd =
+    const kFwd =
       (this.keys.has('KeyW') || this.keys.has('ArrowUp') ? 1 : 0) -
       (this.keys.has('KeyS') || this.keys.has('ArrowDown') ? 1 : 0);
-    const strafe =
+    const kStrafe =
       (this.keys.has('KeyD') || this.keys.has('ArrowRight') ? 1 : 0) -
       (this.keys.has('KeyA') || this.keys.has('ArrowLeft') ? 1 : 0);
+    const fwd = Math.max(-1, Math.min(1, kFwd + this.gpForward));
+    const strafe = Math.max(-1, Math.min(1, kStrafe + this.gpStrafe));
 
     if (fwd !== 0 || strafe !== 0) {
       const fx = -Math.sin(this.yaw);
@@ -207,12 +254,12 @@ export class FirstPersonController {
       let mx = fx * fwd + rx * strafe;
       let mz = fz * fwd + rz * strafe;
       const len = Math.hypot(mx, mz);
-      if (len > 0) {
+      if (len > 1) {
         mx /= len;
         mz /= len;
-        this.pos.x += mx * MOVE_SPEED * stepDt;
-        this.pos.z += mz * MOVE_SPEED * stepDt;
       }
+      this.pos.x += mx * MOVE_SPEED * stepDt;
+      this.pos.z += mz * MOVE_SPEED * stepDt;
     }
 
     // Horizontal AABB push-out against blocks overlapping the player's vertical span.
@@ -231,8 +278,8 @@ export class FirstPersonController {
       }
     }
 
-    if (this.keys.has('Space') && this.grounded) {
-      this.vy = JUMP_SPEED;
+    if ((this.keys.has('Space') || this.gpJump) && this.grounded) {
+      this.vy = JUMP_SPEED * jumpMultiplier;
       this.grounded = false;
     }
 

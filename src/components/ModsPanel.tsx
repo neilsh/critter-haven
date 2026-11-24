@@ -15,7 +15,7 @@ export function ModsPanel({ actions }: { actions: GameActions }) {
         type="button"
         data-testid="mods-open"
         onClick={() => setOpen(true)}
-        className="pointer-events-auto flex min-h-12 items-center gap-1.5 rounded-2xl bg-white/90 px-3.5 text-sm font-extrabold shadow-md backdrop-blur active:scale-95"
+        className="pointer-events-auto flex min-h-11 items-center gap-1.5 rounded-2xl bg-white/90 px-3.5 text-sm font-extrabold shadow-md backdrop-blur active:scale-95"
       >
         <Puzzle size={20} aria-hidden="true" />
         <span>Mods</span>

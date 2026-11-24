@@ -177,6 +177,25 @@ export class SceneManager {
     this.controls.enabled = this.orbitMode && enabled;
   }
 
+  /** Orbits and zooms the camera around the island target by spherical deltas (used by gamepad). */
+  orbitBy(deltaAzimuth: number, deltaPolar: number, deltaDistance = 0): void {
+    if (!this.orbitMode || !this.controls.enabled) return;
+    this.cancelTween();
+    const offset = this.camera.position.clone().sub(this.controls.target);
+    const sph = new THREE.Spherical().setFromVector3(offset);
+    sph.theta += deltaAzimuth;
+    sph.phi = Math.max(
+      this.controls.minPolarAngle,
+      Math.min(this.controls.maxPolarAngle, sph.phi + deltaPolar),
+    );
+    sph.radius = Math.max(
+      this.controls.minDistance,
+      Math.min(this.controls.maxDistance, sph.radius + deltaDistance),
+    );
+    this.camera.position.copy(this.controls.target).add(offset.setFromSpherical(sph));
+    this.controls.update();
+  }
+
   /** Switches between Orbit camera (true) and First-Person camera (false). */
   setOrbitMode(on: boolean): void {
     if (this.orbitMode === on) return;

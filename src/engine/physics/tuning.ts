@@ -56,7 +56,7 @@ export const PHYSICS_TUNING = {
   gravity: 9.81,
   solverIterations: 8,
   /** World units of stretch that a maxStress = 1 joint tolerates. */
-  stretchUnit: 0.06,
+  stretchUnit: 0.054,
   /** Foundation anchors are this much stronger than the block's own material. */
   anchorStrength: 1,
   /** Acceleration-based spring stiffness (1/s^2) of block links, times material stiffness. */
@@ -72,55 +72,55 @@ export const PHYSICS_TUNING = {
    */
   colliderScale: 0.97,
   /** Island displacement: layered sines (world units, Hz), z gets a weaker copy. */
-  quake: { amplitude: 0.22, freqs: [1.6, 2.7, 4.1], weights: [1, 0.45, 0.2], zRatio: 0.35 },
+  quake: { amplitude: 0.25, freqs: [1.6, 2.7, 4.1], weights: [1, 0.45, 0.2], zRatio: 0.35 },
   /** Wind force per unit of open upwind face, grows with height; gusts vary between gustMin and ~1.3. */
-  wind: { force: 12, gustMin: 0.45, heightGain: 0.35 },
+  wind: { force: 12.6, gustMin: 0.45, heightGain: 0.35 },
   /** Water rises from start to peak; the current pushes upstream faces, buoyancy lifts by material. */
-  flood: { start: -1, peak: 3.2, riseSeconds: 5.5, drag: 1.2, current: 420 },
-  hail: { perSecond: 7, radiusMin: 0.3, radiusMax: 0.5, density: 2.4, speed: 14, height: 14 },
+  flood: { start: -1, peak: 3.5, riseSeconds: 5.5, drag: 1.2, current: 445 },
+  hail: { perSecond: 8.0, radiusMin: 0.3, radiusMax: 0.5, density: 2.5, speed: 15.5, height: 14 },
   fire_tornado: {
-    windForce: 9.5,
+    windForce: 12.5,
     swirlSpeed: 1.8,
-    perSecond: 4.5,
+    perSecond: 6.5,
     radiusMin: 0.35,
     radiusMax: 0.52,
-    density: 2.0,
-    speed: 14,
+    density: 2.2,
+    speed: 16.5,
   },
   snow_storm: {
-    windForce: 8.0,
-    perSecond: 6.0,
+    windForce: 11.0,
+    perSecond: 8.5,
     radiusMin: 0.35,
     radiusMax: 0.55,
-    density: 1.8,
-    speed: 12,
+    density: 2.0,
+    speed: 15,
     height: 14,
   },
-  raid: { perSecond: 3.5, radiusMin: 0.38, radiusMax: 0.55, density: 2.4, speed: 17, spawnRadius: 15 },
-  meteor: { perSecond: 2.0, radiusMin: 0.6, radiusMax: 0.85, density: 2.9, speed: 16, height: 18 },
+  raid: { perSecond: 5.2, radiusMin: 0.38, radiusMax: 0.55, density: 2.6, speed: 19.5, spawnRadius: 15 },
+  meteor: { perSecond: 3.0, radiusMin: 0.6, radiusMax: 0.85, density: 3.4, speed: 18.5, height: 18 },
   shield: { radius: 5.5, stressMultiplier: 3.0, stiffnessMultiplier: 1.8 },
   laser: { range: 11, cooldown: 1.2 },
   /** Disaster force multiplier per strength level (medium is the calibrated baseline). */
-  strength: { gentle: 0.6, medium: 1, strong: 1.4 } satisfies Record<Strength, number>,
+  strength: { gentle: 0.6, medium: 1, strong: 1.5 } satisfies Record<Strength, number>,
   /** A piece whose centre drifts further than this (world units, relative to the island) has fallen. */
-  standing: { tolerance: 1 },
+  standing: { tolerance: 0.8 },
   player: {
     maxHp: 100,
     radius: 0.55,
     height: 1.75,
-    invulnSeconds: 0.45,
-    blockHitSpeed: 2.8,
-    blockDamage: 20,
-    drownDps: 25,
+    invulnSeconds: 0.2,
+    blockHitSpeed: 1.8,
+    blockDamage: 40,
+    drownDps: 45,
     fallY: -6,
   },
   projectileDamage: {
-    hail: 15,
-    snowball: 12,
-    fireball: 25,
-    raider: 28,
-    meteor: 45,
-    custom: 22,
+    hail: 25,
+    snowball: 20,
+    fireball: 45,
+    raider: 50,
+    meteor: 80,
+    custom: 35,
   } satisfies Record<ProjectileKind, number>,
 };
 
@@ -130,6 +130,17 @@ export interface PlayerHitResult {
   damage: number;
   cause: string | null;
   impact: boolean;
+}
+
+export interface PlayerProtection {
+  damageReduction?: number;
+  floodImmune?: boolean;
+}
+
+export interface WeaponFireResult {
+  hit: boolean;
+  hitPoint: Vec3;
+  destroyedCount: number;
 }
 
 /** Star rating: 3 with zero broken joints, otherwise by the fraction of pieces still standing. */

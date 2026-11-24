@@ -16,12 +16,26 @@ import type {
   PresetName,
   Strength,
   Telemetry,
+  ToolType,
   Vec3,
 } from '../types/blueprint';
-import type { GameActions } from '../types/ui';
+import type { GameActions, PlayMode } from '../types/ui';
+import {
+  ARMORS,
+  GEAR_ORDER,
+  WEAPONS,
+  isArmorId,
+  isWeaponId,
+  type ArmorDef,
+  type ArmorId,
+  type WeaponDef,
+  type WeaponId,
+} from '../types/gear';
 import {
   DEFAULT_STRENGTH,
+  DISASTER_ORDER,
   DISASTER_SECONDS,
+  MATERIAL_ORDER,
   cellToWorld,
   emptyGraph,
   isBuiltinDisaster,
@@ -37,14 +51,24 @@ import {
   computeAvailablePoints,
   computeUnlocked,
   loadBest,
+  loadGear,
+  loadSurvival,
   loadUnlockedMaterials,
+  loadUnlockedPresets,
   recordResult,
   saveBest,
+  saveGear,
+  saveSurvival,
   saveUnlockedMaterials,
+  saveUnlockedPresets,
+  tryUnlockGear,
   tryUnlockMaterial,
+  tryUnlockPreset,
 } from '../levels/progress';
+import { getSurvivalWave } from '../levels/survival';
 import { BuildController } from './BuildController';
 import { FirstPersonController } from './FirstPersonController';
+import { GamepadManager } from './GamepadManager';
 import { PHYSICS_TUNING, PhysicsSim, type SimOptions } from './PhysicsSim';
 import { AudioSynth, ProceduralAssets } from './ProceduralAssets';
 import { SceneManager } from './SceneManager';
@@ -59,18 +83,23 @@ export class Game implements GameActions, GameDebugApi {
   readonly audio = new AudioSynth();
   readonly build: BuildController;
   readonly firstPerson: FirstPersonController;
+  readonly gamepad = new GamepadManager();
   readonly physics = new PhysicsSim();
 
   /** Incremented on every start/rewind so a slow async start cannot resurrect a cancelled run. */
   private runToken = 0;
   private currentRunDuration = DISASTER_SECONDS;
   private openModals = 0;
+  private weaponCooldown = 0;
+  private survivalBonusPoints = 0;
+  private rewardedSurvivalWave = 0;
   private cleanups: Array<() => void> = [];
 
   constructor(container: HTMLElement) {
     this.scene = new SceneManager(container);
     this.build = new BuildController(this.scene, this.assets, this.audio);
     this.firstPerson = new FirstPersonController(this.scene.camera, this.scene.domElement);
+    this.firstPerson.setFireHandler((source) => this.handlePrimaryAction(source));
 
     const mods = loadMods();
     modStore.setMods(mods);
@@ -84,8 +113,9 @@ export class Game implements GameActions, GameDebugApi {
       },
       onSurvived: () => this.audio.playVictory(),
       onIntensity: (disaster, intensity) => {
+        const sNow = uiStore.getState();
         const customD =
-          uiStore.getState().levelId === null
+          sNow.levelId === null && sNow.playMode !== 'survival'
             ? modStore.getState().active.disasterMap.get(disaster)
             : undefined;
         const customMeta = customD
@@ -114,15 +144,67 @@ export class Game implements GameActions, GameDebugApi {
 
     const best = loadBest(LEVELS);
     const unlockedMaterials = loadUnlockedMaterials();
+    const unlockedPresets = loadUnlockedPresets();
+    const gear = loadGear();
+    const survival = loadSurvival();
+    this.survivalBonusPoints = survival.bonusPoints;
+    const playerMaxHp = this.computeMaxHp(gear.armor);
     levelStore.setState({ best });
     uiStore.setState({
+      playMode: 'creative',
+      menuOpen: true,
+      hasStarted: false,
+      survivalWave: 1,
+      survivalBestWave: survival.bestWave,
+      survivalOver: false,
+      survivalFailReason: null,
+      survivalLastReward: 0,
       unlocked: computeUnlocked(LEVELS, best),
       unlockedMaterials,
-      points: computeAvailablePoints(LEVELS, best, unlockedMaterials),
+      unlockedPresets,
+      unlockedGear: gear.unlocked,
+      equippedArmor: gear.armor,
+      equippedWeapon: gear.weapon,
+      firstPerson: true,
+      gamepadConnected: this.gamepad.isConnected(),
+      playerMaxHp,
+      playerHp: playerMaxHp,
+      points: computeAvailablePoints(
+        LEVELS,
+        best,
+        unlockedMaterials,
+        gear.unlocked,
+        unlockedPresets,
+        this.survivalBonusPoints,
+      ),
     });
+
+    this.scene.setOrbitMode(false);
+    this.firstPerson.spawn(this.currentBlockCenters());
+    this.firstPerson.setEnabled(true);
+    this.build.setCrosshairMode(true);
+    this.build.setEnabled(true);
+    this.syncInputPaused();
+
+    const GAMEPAD_LOST_NOTICE =
+      'Gamepad disconnected — click the game and press any controller button to reconnect.';
+    let wasGamepadConnected = this.gamepad.isConnected();
 
     this.cleanups.push(
       this.scene.onFrame((dt) => this.tick(dt)),
+      this.gamepad.onConnectionChange((connected) => {
+        uiStore.setState({ gamepadConnected: connected });
+        if (wasGamepadConnected && !connected) {
+          levelStore.setState({ notice: GAMEPAD_LOST_NOTICE });
+        } else if (
+          !wasGamepadConnected &&
+          connected &&
+          levelStore.getState().notice === GAMEPAD_LOST_NOTICE
+        ) {
+          levelStore.setState({ notice: null });
+        }
+        wasGamepadConnected = connected;
+      }),
       this.build.subscribe(() => {
         const g = this.build.getGraph();
         uiStore.setState({ canUndo: this.build.canUndo() });
@@ -133,61 +215,282 @@ export class Game implements GameActions, GameDebugApi {
 
   private lastMode: Telemetry['mode'] = 'build';
 
-  /** On the frame a level run finishes, records its stars and unlocks the next level. */
+  private syncInputPaused() {
+    const paused = this.openModals > 0 || uiStore.getState().menuOpen;
+    this.firstPerson.setInputPaused(paused);
+    this.gamepad.setPaused(paused);
+  }
+
+  private isCreativeSandbox(): boolean {
+    const s = uiStore.getState();
+    return s.playMode === 'creative' && s.levelId === null;
+  }
+
+  private isSurvivalMode(): boolean {
+    const s = uiStore.getState();
+    return s.playMode === 'survival' && s.levelId === null;
+  }
+
+  private lockedBySurvival(): boolean {
+    if (!this.isSurvivalMode()) return false;
+    levelStore.setState({ notice: 'Survival waves pick the next disaster automatically.' });
+    return true;
+  }
+
+  private lockedBySurvivalEnd(): boolean {
+    const s = uiStore.getState();
+    return s.playMode === 'survival' && s.levelId === null && (s.survivalOver || s.mode === 'survived');
+  }
+
+  /** On the frame a level or survival wave finishes, records stars/wave rewards and updates points. */
   private recordLevelResult(mode: Telemetry['mode'], stars: Telemetry['stars']) {
     const finished = mode === 'survived' || mode === 'failed';
     const justFinished = finished && this.lastMode === 'simulating';
     this.lastMode = mode;
-    const levelId = uiStore.getState().levelId;
-    if (!justFinished || !levelId) return;
-    const out = recordResult(LEVELS, levelStore.getState().best, levelId, stars);
-    saveBest(out.best);
-    levelStore.setState({ best: out.best, justUnlocked: out.newlyUnlocked });
-    const unlockedMaterials = uiStore.getState().unlockedMaterials;
-    uiStore.setState({
-      unlocked: computeUnlocked(LEVELS, out.best),
-      points: computeAvailablePoints(LEVELS, out.best, unlockedMaterials),
-    });
+    const s0 = uiStore.getState();
+    if (!justFinished) return;
+    if (s0.levelId) {
+      const out = recordResult(LEVELS, levelStore.getState().best, s0.levelId, stars);
+      saveBest(out.best);
+      levelStore.setState({ best: out.best, justUnlocked: out.newlyUnlocked });
+      uiStore.setState({
+        unlocked: computeUnlocked(LEVELS, out.best),
+        points: computeAvailablePoints(
+          LEVELS,
+          out.best,
+          s0.unlockedMaterials,
+          s0.unlockedGear,
+          s0.unlockedPresets,
+          this.survivalBonusPoints,
+        ),
+      });
+      return;
+    }
+    if (s0.playMode === 'survival' && !s0.survivalOver) {
+      if (mode === 'survived') {
+        const waveDef = getSurvivalWave(s0.survivalWave);
+        const alreadyRewarded = s0.survivalWave <= this.rewardedSurvivalWave;
+        if (!alreadyRewarded) {
+          this.rewardedSurvivalWave = s0.survivalWave;
+          this.survivalBonusPoints += waveDef.rewardPoints;
+        }
+        const bestWave = Math.max(s0.survivalBestWave, s0.survivalWave);
+        saveSurvival({ bestWave, bonusPoints: this.survivalBonusPoints });
+        uiStore.setState({
+          survivalBestWave: bestWave,
+          survivalLastReward: alreadyRewarded ? s0.survivalLastReward : waveDef.rewardPoints,
+          points: computeAvailablePoints(
+            LEVELS,
+            levelStore.getState().best,
+            s0.unlockedMaterials,
+            s0.unlockedGear,
+            s0.unlockedPresets,
+            this.survivalBonusPoints,
+          ),
+        });
+      } else {
+        uiStore.setState({
+          survivalOver: true,
+          survivalFailReason: 'Your building collapsed!',
+        });
+      }
+    }
+  }
+
+  private getEquippedArmor(): ArmorDef | null {
+    const id = uiStore.getState().equippedArmor;
+    return id ? ARMORS[id] : null;
+  }
+
+  private getEquippedWeapon(): WeaponDef | null {
+    const id = uiStore.getState().equippedWeapon;
+    return id ? WEAPONS[id] : null;
+  }
+
+  private computeMaxHp(armorId: ArmorId | null): number {
+    return PHYSICS_TUNING.player.maxHp + (armorId ? ARMORS[armorId].bonusHp : 0);
+  }
+
+  private handlePrimaryAction(source: 'click' | 'key'): void {
+    if (source === 'key') {
+      if (uiStore.getState().equippedWeapon) this.fireWeapon();
+      else {
+        this.audio.resume();
+        this.build.toggleDoorAtCrosshair(6);
+      }
+      return;
+    }
+    if (uiStore.getState().mode === 'build') {
+      this.audio.resume();
+      this.build.applyToolAtCrosshair();
+    } else if (!uiStore.getState().equippedWeapon && this.build.toggleDoorAtCrosshair(6)) {
+      this.audio.resume();
+    } else {
+      this.fireWeapon();
+    }
+  }
+
+  private cycleTool(): void {
+    const TOOLS: readonly ToolType[] = ['block', 'brace', 'paint', 'erase'];
+    const idx = TOOLS.indexOf(uiStore.getState().tool);
+    const next = TOOLS[(idx + 1) % TOOLS.length];
+    if (next) this.setTool(next);
+  }
+
+  private cycleMaterial(step: number): void {
+    const s0 = uiStore.getState();
+    const constraints = this.build.getConstraints();
+    const customIds =
+      s0.levelId === null && s0.playMode !== 'survival'
+        ? modStore.getState().active.blocks.map((b) => b.id)
+        : [];
+    const baseMaterials = this.isCreativeSandbox() ? MATERIAL_ORDER : s0.unlockedMaterials;
+    const pool = [...baseMaterials, ...customIds].filter((m) => isMaterialAllowed(constraints, m));
+    if (pool.length === 0) return;
+    const idx = pool.indexOf(s0.material);
+    const base = idx >= 0 ? idx : 0;
+    const next = pool[(base + step + pool.length) % pool.length];
+    if (next) this.setMaterial(next);
+  }
+
+  private cycleDisaster(): void {
+    if (uiStore.getState().levelId !== null || this.isSurvivalMode()) return;
+    const customIds = modStore.getState().active.disasters.map((d) => d.id);
+    const pool: readonly DisasterType[] = [...DISASTER_ORDER, ...customIds];
+    if (pool.length === 0) return;
+    const idx = pool.indexOf(uiStore.getState().disaster);
+    const next = pool[(idx + 1) % pool.length];
+    if (next) this.setDisaster(next);
+  }
+
+  private cycleGear(slot: 'armor' | 'weapon'): void {
+    const s0 = uiStore.getState();
+    const pool = this.isCreativeSandbox() ? GEAR_ORDER : s0.unlockedGear;
+    const owned = pool.filter(slot === 'armor' ? isArmorId : isWeaponId);
+    if (owned.length === 0) return;
+    const current = slot === 'armor' ? s0.equippedArmor : s0.equippedWeapon;
+    const idx = current ? owned.indexOf(current) : -1;
+    const next = owned[(idx + 1) % owned.length];
+    if (next) this.equipGear(next, slot);
+  }
+
+  private handleGamepad(dt: number): void {
+    const gp = this.gamepad.poll();
+    if (!gp.connected || this.openModals > 0 || uiStore.getState().menuOpen) {
+      this.firstPerson.setGamepadInput(0, 0, false);
+      return;
+    }
+    this.firstPerson.setGamepadInput(gp.moveX, gp.moveY, gp.jumpHeld);
+    if (gp.lookX !== 0 || gp.lookY !== 0) {
+      this.firstPerson.lookAngles(gp.lookX * 2.4 * dt, gp.lookY * 2.0 * dt);
+    }
+    if (gp.toggleDisaster) this.toggleDisaster();
+    if (gp.backOrUndo) {
+      if (this.build.hasActiveBrace()) this.build.cancelBrace();
+      else if (this.lockedBySurvivalEnd()) {
+        // Require explicit Next Wave / Retry / Main Menu instead of rewinding past a finished Survival wave.
+      } else if (uiStore.getState().mode !== 'build') this.rewind();
+      else this.undo();
+    }
+    if (uiStore.getState().mode === 'build') {
+      if (gp.primaryPressed) {
+        this.audio.resume();
+        this.build.applyToolAtCrosshair();
+      }
+      if (gp.secondaryPressed) {
+        this.audio.resume();
+        this.build.eraseAtCrosshair();
+      }
+      if (gp.actionXPressed) this.cycleTool();
+      if (gp.prevShoulder) this.cycleMaterial(-1);
+      if (gp.nextShoulder) this.cycleMaterial(1);
+      if (gp.toggleFirstPerson) this.cycleDisaster();
+    } else {
+      if (gp.fireHeld) this.fireWeapon();
+      if (gp.prevShoulder) this.cycleGear('armor');
+      if (gp.nextShoulder) this.cycleGear('weapon');
+    }
   }
 
   private currentBlockCenters(): Vec3[] {
+    const openDoors = this.build.getOpenDoorIds();
     if (uiStore.getState().mode !== 'build') {
-      const live = this.physics.getBlockPositions();
+      const live = this.physics.getBlockPositions(openDoors);
       if (live.length > 0 || this.build.getGraph().blocks.length === 0) return live;
     }
-    return this.build.getGraph().blocks.map((b) => cellToWorld(b.cell));
+    return this.build
+      .getGraph()
+      .blocks.filter((b) => !this.build.isDoorOpen(b.id))
+      .map((b) => cellToWorld(b.cell));
   }
 
   private tick(dt: number) {
+    this.weaponCooldown = Math.max(0, this.weaponCooldown - Math.max(0, dt));
+    if (dt > 0) this.handleGamepad(dt);
     if (this.physics.isRunning()) this.physics.update(dt);
     if (uiStore.getState().firstPerson) {
+      const sNow = uiStore.getState();
       const gravity =
-        uiStore.getState().levelId === null
+        sNow.levelId === null && sNow.playMode !== 'survival'
           ? PHYSICS_TUNING.gravity * modStore.getState().active.gravityMultiplier
           : PHYSICS_TUNING.gravity;
+      const armor = this.getEquippedArmor();
       const centers = this.currentBlockCenters();
-      this.firstPerson.update(dt, centers, gravity);
+      this.firstPerson.update(dt, centers, gravity, armor?.jumpMultiplier ?? 1);
       if (this.physics.isRunning()) {
-        const hit = this.physics.checkPlayerDamage(this.firstPerson.getFeetPosition(), dt);
-        if (hit.damage > 0) {
-          const s0 = uiStore.getState();
-          const nextHp = Math.max(0, s0.playerHp - hit.damage);
-          if (nextHp <= 0) {
-            this.audio.playKO();
-            levelStore.setState({ notice: `${hit.cause ?? 'Knocked out!'} Restarting...` });
-            uiStore.setState({ playerHp: s0.playerMaxHp, damageFlash: s0.damageFlash + 1 });
-            this.rewind();
-            this.firstPerson.spawn(this.currentBlockCenters());
-            return;
+        if (this.isCreativeSandbox()) {
+          if (this.firstPerson.getFeetPosition()[1] < PHYSICS_TUNING.player.fallY) {
+            this.firstPerson.spawn(centers);
           }
-          uiStore.setState({
-            playerHp: nextHp,
-            ...(hit.impact ? { damageFlash: s0.damageFlash + 1 } : {}),
-          });
-          if (hit.impact) this.audio.playHit();
+        } else {
+          const feet = this.firstPerson.getFeetPosition();
+          const hit = this.physics.checkPlayerDamage(
+            feet,
+            dt,
+            armor ? { damageReduction: armor.damageReduction, floodImmune: armor.floodImmune } : undefined,
+          );
+          if (hit.damage > 0) {
+            const s0 = uiStore.getState();
+            const fellOff = feet[1] < PHYSICS_TUNING.player.fallY;
+            const nextHp = fellOff ? 0 : Math.max(0, s0.playerHp - hit.damage);
+            if (nextHp <= 0) {
+              this.audio.playKO();
+              if (s0.playMode === 'survival' && s0.levelId === null) {
+                this.runToken++;
+                this.physics.stop();
+                this.build.setEnabled(false);
+                this.scene.setWaterLevel(WATER_HIDDEN);
+                this.audio.playWind(0);
+                this.audio.playRumble(0);
+                this.scene.setDisasterFx(s0.disaster, 0);
+                this.lastMode = 'failed';
+                uiStore.setState({
+                  mode: 'failed',
+                  playerHp: 0,
+                  survivalOver: true,
+                  survivalFailReason: hit.cause ?? 'Knocked out!',
+                  damageFlash: s0.damageFlash + 1,
+                });
+                return;
+              }
+              levelStore.setState({ notice: `${hit.cause ?? 'Knocked out!'} Restarting...` });
+              uiStore.setState({ playerHp: s0.playerMaxHp, damageFlash: s0.damageFlash + 1 });
+              this.rewind();
+              this.firstPerson.spawn(this.currentBlockCenters());
+              return;
+            }
+            uiStore.setState({
+              playerHp: nextHp,
+              ...(hit.impact ? { damageFlash: s0.damageFlash + 1 } : {}),
+            });
+            if (hit.impact) this.audio.playHit();
+          }
         }
+      } else if (this.firstPerson.getFeetPosition()[1] < PHYSICS_TUNING.player.fallY) {
+        this.firstPerson.spawn(centers);
       }
     }
+    if (uiStore.getState().survivalOver) return;
     const t = this.physics.getTelemetry();
     const s = uiStore.getState();
     const uiTimeRemaining = t.mode === 'simulating' ? Math.ceil(t.timeRemaining) : t.timeRemaining;
@@ -244,7 +547,7 @@ export class Game implements GameActions, GameDebugApi {
   };
   setMaterial: GameActions['setMaterial'] = (m) => {
     if (isBuiltinMaterial(m)) {
-      if (!uiStore.getState().unlockedMaterials.includes(m)) {
+      if (!this.isCreativeSandbox() && !uiStore.getState().unlockedMaterials.includes(m)) {
         levelStore.setState({ notice: 'Unlock this in the Shop first!' });
         return;
       }
@@ -252,7 +555,11 @@ export class Game implements GameActions, GameDebugApi {
         levelStore.setState({ notice: 'This level does not have that material.' });
         return;
       }
-    } else if (uiStore.getState().levelId !== null || !modStore.getState().active.blockMap.has(m)) {
+    } else if (
+      uiStore.getState().levelId !== null ||
+      this.isSurvivalMode() ||
+      !modStore.getState().active.blockMap.has(m)
+    ) {
       levelStore.setState({ notice: 'Enable this mod in Free Build to use it.' });
       return;
     }
@@ -306,27 +613,163 @@ export class Game implements GameActions, GameDebugApi {
   };
   unlockMaterial: GameActions['unlockMaterial'] = (m) => {
     const best = levelStore.getState().best;
-    const res = tryUnlockMaterial(LEVELS, best, uiStore.getState().unlockedMaterials, m);
+    const s0 = uiStore.getState();
+    const res = tryUnlockMaterial(
+      LEVELS,
+      best,
+      s0.unlockedMaterials,
+      m,
+      s0.unlockedGear,
+      s0.unlockedPresets,
+      this.survivalBonusPoints,
+    );
     if (!res.ok) return false;
     saveUnlockedMaterials(res.unlocked);
     uiStore.setState({
       unlockedMaterials: res.unlocked,
-      points: computeAvailablePoints(LEVELS, best, res.unlocked),
+      points: computeAvailablePoints(
+        LEVELS,
+        best,
+        res.unlocked,
+        s0.unlockedGear,
+        s0.unlockedPresets,
+        this.survivalBonusPoints,
+      ),
     });
     this.audio.resume();
     this.audio.playUnlock();
     return true;
+  };
+  unlockPreset: GameActions['unlockPreset'] = (p) => {
+    const best = levelStore.getState().best;
+    const s0 = uiStore.getState();
+    const res = tryUnlockPreset(
+      LEVELS,
+      best,
+      s0.unlockedMaterials,
+      s0.unlockedGear,
+      s0.unlockedPresets,
+      p,
+      this.survivalBonusPoints,
+    );
+    if (!res.ok) return false;
+    saveUnlockedPresets(res.unlocked);
+    uiStore.setState({
+      unlockedPresets: res.unlocked,
+      points: computeAvailablePoints(
+        LEVELS,
+        best,
+        s0.unlockedMaterials,
+        s0.unlockedGear,
+        res.unlocked,
+        this.survivalBonusPoints,
+      ),
+    });
+    this.audio.resume();
+    this.audio.playUnlock();
+    return true;
+  };
+  unlockGear: GameActions['unlockGear'] = (id) => {
+    const best = levelStore.getState().best;
+    const s0 = uiStore.getState();
+    const res = tryUnlockGear(
+      LEVELS,
+      best,
+      s0.unlockedMaterials,
+      s0.unlockedGear,
+      id,
+      s0.unlockedPresets,
+      this.survivalBonusPoints,
+    );
+    if (!res.ok) return false;
+    const nextArmor = isArmorId(id) ? id : s0.equippedArmor;
+    const nextWeapon = isWeaponId(id) ? id : s0.equippedWeapon;
+    const savedGear = loadGear();
+    saveGear({
+      unlocked: res.unlocked,
+      armor: nextArmor && res.unlocked.includes(nextArmor) ? nextArmor : savedGear.armor,
+      weapon: nextWeapon && res.unlocked.includes(nextWeapon) ? nextWeapon : savedGear.weapon,
+    });
+    const playerMaxHp = this.computeMaxHp(nextArmor);
+    const playerHp = isArmorId(id) ? playerMaxHp : Math.min(s0.playerHp, playerMaxHp);
+    uiStore.setState({
+      unlockedGear: res.unlocked,
+      equippedArmor: nextArmor,
+      equippedWeapon: nextWeapon,
+      playerMaxHp,
+      playerHp,
+      points: computeAvailablePoints(
+        LEVELS,
+        best,
+        s0.unlockedMaterials,
+        res.unlocked,
+        s0.unlockedPresets,
+        this.survivalBonusPoints,
+      ),
+    });
+    this.audio.resume();
+    this.audio.playUnlock();
+    return true;
+  };
+  equipGear: GameActions['equipGear'] = (id, slot) => {
+    const s0 = uiStore.getState();
+    if (id !== null) {
+      if (!this.isCreativeSandbox() && !s0.unlockedGear.includes(id)) return;
+      if (slot === 'armor' && !isArmorId(id)) return;
+      if (slot === 'weapon' && !isWeaponId(id)) return;
+    }
+    const nextArmor: ArmorId | null =
+      slot === 'armor' ? (id !== null && isArmorId(id) ? id : null) : s0.equippedArmor;
+    const nextWeapon: WeaponId | null =
+      slot === 'weapon' ? (id !== null && isWeaponId(id) ? id : null) : s0.equippedWeapon;
+    if (
+      (nextArmor === null || s0.unlockedGear.includes(nextArmor)) &&
+      (nextWeapon === null || s0.unlockedGear.includes(nextWeapon))
+    ) {
+      saveGear({ unlocked: s0.unlockedGear, armor: nextArmor, weapon: nextWeapon });
+    }
+    const prevMax = s0.playerMaxHp;
+    const playerMaxHp = this.computeMaxHp(nextArmor);
+    const playerHp = !this.physics.isRunning()
+      ? playerMaxHp
+      : Math.min(playerMaxHp, s0.playerHp + Math.max(0, playerMaxHp - prevMax));
+    uiStore.setState({
+      equippedArmor: nextArmor,
+      equippedWeapon: nextWeapon,
+      playerMaxHp,
+      playerHp,
+    });
+  };
+  fireWeapon: GameActions['fireWeapon'] = () => {
+    const s0 = uiStore.getState();
+    if (!s0.firstPerson || this.weaponCooldown > 0) return;
+    const weapon = this.getEquippedWeapon();
+    if (!weapon) return;
+    this.weaponCooldown = weapon.cooldown;
+    const eye = this.firstPerson.getEyePosition();
+    const dir = this.firstPerson.getLookDirection();
+    const result = this.physics.firePlayerWeapon(eye, dir, weapon);
+    const rx = Math.cos(this.firstPerson.yaw);
+    const rz = -Math.sin(this.firstPerson.yaw);
+    const muzzle: Vec3 = [
+      eye[0] + rx * 0.35 + dir[0] * 0.4,
+      eye[1] - 0.25 + dir[1] * 0.4,
+      eye[2] + rz * 0.35 + dir[2] * 0.4,
+    ];
+    this.scene.laserBeam(muzzle, result.hitPoint);
+    this.audio.resume();
+    this.audio.playLaserZap();
   };
   setMirrorX: GameActions['setMirrorX'] = (on) => {
     this.build.setMirrorX(on);
     uiStore.setState({ mirrorX: on });
   };
   setDisaster: GameActions['setDisaster'] = (d) => {
-    if (this.lockedByLevel()) return;
+    if (this.lockedByLevel() || this.lockedBySurvival()) return;
     uiStore.setState({ disaster: d });
   };
   setStrength: GameActions['setStrength'] = (s) => {
-    if (this.lockedByLevel()) return;
+    if (this.lockedByLevel() || this.lockedBySurvival()) return;
     uiStore.setState({ strength: s });
   };
 
@@ -343,20 +786,60 @@ export class Game implements GameActions, GameDebugApi {
     const level = id ? getLevel(id) : undefined;
     if (level && !uiStore.getState().unlocked.includes(level.id)) return;
     levelStore.setState({ notice: null, justUnlocked: null });
+    const s0 = uiStore.getState();
     if (!level) {
       this.build.setConstraints(null);
-      uiStore.setState({ levelId: null });
+      uiStore.setState({
+        playMode: 'creative',
+        menuOpen: false,
+        hasStarted: true,
+        survivalOver: false,
+        survivalFailReason: null,
+        survivalLastReward: 0,
+        levelId: null,
+      });
+      this.syncInputPaused();
       return;
     }
     this.build.setConstraints(null);
     this.build.loadGraph(level.start?.() ?? emptyGraph());
     this.build.setConstraints(level.constraints ?? null);
     const allowed = level.constraints?.materials;
-    const { material } = uiStore.getState();
     const first = allowed?.[0];
-    if (first && !allowed.includes(material)) this.setMaterial(first);
-    else if (!isBuiltinMaterial(material)) this.setMaterial('wood');
-    uiStore.setState({ levelId: level.id, disaster: level.disaster, strength: level.strength });
+    let nextMaterial = s0.material;
+    if (first && !allowed.includes(s0.material)) {
+      this.build.setMaterial(first);
+      nextMaterial = first;
+    } else if (!isBuiltinMaterial(s0.material)) {
+      this.build.setMaterial('wood');
+      nextMaterial = 'wood';
+    } else if (!s0.unlockedMaterials.includes(s0.material)) {
+      const fallback = allowed?.find((m) => s0.unlockedMaterials.includes(m)) ?? 'wood';
+      this.build.setMaterial(fallback);
+      nextMaterial = fallback;
+    }
+    const nextArmor =
+      s0.equippedArmor && s0.unlockedGear.includes(s0.equippedArmor) ? s0.equippedArmor : null;
+    const nextWeapon =
+      s0.equippedWeapon && s0.unlockedGear.includes(s0.equippedWeapon) ? s0.equippedWeapon : null;
+    const playerMaxHp = this.computeMaxHp(nextArmor);
+    uiStore.setState({
+      playMode: 'creative',
+      menuOpen: false,
+      hasStarted: true,
+      survivalOver: false,
+      survivalFailReason: null,
+      survivalLastReward: 0,
+      levelId: level.id,
+      disaster: level.disaster,
+      strength: level.strength,
+      material: nextMaterial,
+      equippedArmor: nextArmor,
+      equippedWeapon: nextWeapon,
+      playerMaxHp,
+      playerHp: playerMaxHp,
+    });
+    this.syncInputPaused();
   };
   loadPreset: GameActions['loadPreset'] = (p: PresetName) => {
     // Presets would bypass the level's block and material limits, so they are free-build only.
@@ -364,20 +847,47 @@ export class Game implements GameActions, GameDebugApi {
       levelStore.setState({ notice: 'Starter builds are for free build. Leave the level to use them.' });
       return;
     }
+    if (this.lockedBySurvivalEnd()) return;
+    if (!this.isCreativeSandbox() && !uiStore.getState().unlockedPresets.includes(p)) {
+      levelStore.setState({ notice: 'Unlock this quick-builder in the Shop first!' });
+      return;
+    }
+    levelStore.setState({ notice: null });
     this.ensureBuildMode();
     this.build.loadPreset(p);
+    this.firstPerson.spawn(this.currentBlockCenters());
   };
   undo = () => {
+    if (this.lockedBySurvivalEnd()) return;
     this.ensureBuildMode();
     this.build.undo();
   };
   clearIsland = () => {
+    if (this.lockedBySurvivalEnd()) return;
     this.ensureBuildMode();
     this.build.clear();
   };
   toggleDisaster = () => {
     this.audio.resume();
-    const { mode, disaster, strength, levelId } = uiStore.getState();
+    const { playMode, mode, disaster, strength, levelId, survivalOver, survivalWave } = uiStore.getState();
+    if (playMode === 'survival' && levelId === null) {
+      if (survivalOver) {
+        this.restartSurvival();
+        return;
+      }
+      if (mode === 'survived') {
+        this.nextSurvivalWave();
+        return;
+      }
+      if (mode !== 'build') {
+        this.rewind();
+        return;
+      }
+      const w = getSurvivalWave(survivalWave);
+      levelStore.setState({ notice: null });
+      void this.startDisaster(w.disaster, w.seed, w.strength);
+      return;
+    }
     if (mode !== 'build') {
       this.rewind();
       return;
@@ -392,25 +902,19 @@ export class Game implements GameActions, GameDebugApi {
     else void this.startDisaster(disaster, 1, strength);
   };
   setCameraAzimuth: GameActions['setCameraAzimuth'] = (deg) => {
-    if (uiStore.getState().firstPerson) this.setFirstPerson(false);
-    this.scene.setAzimuth(deg);
-    uiStore.setState({ azimuth: deg });
+    this.firstPerson.yaw = (deg * Math.PI) / 180;
+    this.firstPerson.syncCamera();
+    uiStore.setState({ azimuth: deg, firstPerson: true });
   };
-  setFirstPerson: GameActions['setFirstPerson'] = (on) => {
-    const prev = uiStore.getState().firstPerson;
-    if (prev === on) return;
-    if (on) {
-      this.scene.setOrbitMode(false);
-      this.build.setEnabled(false);
+  setFirstPerson: GameActions['setFirstPerson'] = () => {
+    this.scene.setOrbitMode(false);
+    if (!this.firstPerson.isEnabled()) {
       this.firstPerson.spawn(this.currentBlockCenters());
       this.firstPerson.setEnabled(true);
-      uiStore.setState({ firstPerson: true, playerHp: uiStore.getState().playerMaxHp });
-    } else {
-      this.firstPerson.setEnabled(false);
-      this.scene.setOrbitMode(true);
-      this.build.setEnabled(uiStore.getState().mode === 'build');
-      uiStore.setState({ firstPerson: false, playerHp: uiStore.getState().playerMaxHp });
     }
+    this.build.setCrosshairMode(true);
+    this.build.setEnabled(uiStore.getState().mode === 'build');
+    uiStore.setState({ firstPerson: true });
   };
   setMuted: GameActions['setMuted'] = (muted) => {
     this.audio.setMuted(muted);
@@ -418,7 +922,90 @@ export class Game implements GameActions, GameDebugApi {
   };
   setModalOpen: GameActions['setModalOpen'] = (open) => {
     this.openModals = Math.max(0, this.openModals + (open ? 1 : -1));
-    this.firstPerson.setInputPaused(this.openModals > 0);
+    this.syncInputPaused();
+  };
+  openMenu: GameActions['openMenu'] = () => {
+    uiStore.setState({ menuOpen: true });
+    this.syncInputPaused();
+  };
+  resumeGame: GameActions['resumeGame'] = () => {
+    if (!uiStore.getState().hasStarted) {
+      this.startPlayMode(uiStore.getState().playMode);
+      return;
+    }
+    uiStore.setState({ menuOpen: false });
+    this.syncInputPaused();
+  };
+  startPlayMode: GameActions['startPlayMode'] = (mode: PlayMode) => {
+    this.ensureBuildMode();
+    this.build.setConstraints(null);
+    levelStore.setState({ notice: null, justUnlocked: null });
+    const s0 = uiStore.getState();
+    if (mode === 'creative') {
+      uiStore.setState({
+        playMode: 'creative',
+        levelId: null,
+        menuOpen: false,
+        hasStarted: true,
+        survivalOver: false,
+        survivalFailReason: null,
+        survivalLastReward: 0,
+        playerHp: s0.playerMaxHp,
+      });
+      this.syncInputPaused();
+      return;
+    }
+    this.rewardedSurvivalWave = 0;
+    let nextMaterial = s0.material;
+    if (!isBuiltinMaterial(nextMaterial) || !s0.unlockedMaterials.includes(nextMaterial)) {
+      nextMaterial = 'wood';
+      this.build.setMaterial('wood');
+    }
+    const nextArmor =
+      s0.equippedArmor && s0.unlockedGear.includes(s0.equippedArmor) ? s0.equippedArmor : null;
+    const nextWeapon =
+      s0.equippedWeapon && s0.unlockedGear.includes(s0.equippedWeapon) ? s0.equippedWeapon : null;
+    const playerMaxHp = this.computeMaxHp(nextArmor);
+    const wave1 = getSurvivalWave(1);
+    uiStore.setState({
+      playMode: 'survival',
+      levelId: null,
+      menuOpen: false,
+      hasStarted: true,
+      survivalWave: 1,
+      survivalOver: false,
+      survivalFailReason: null,
+      survivalLastReward: 0,
+      disaster: wave1.disaster,
+      strength: wave1.strength,
+      material: nextMaterial,
+      equippedArmor: nextArmor,
+      equippedWeapon: nextWeapon,
+      playerMaxHp,
+      playerHp: playerMaxHp,
+    });
+    this.firstPerson.spawn(this.currentBlockCenters());
+    this.syncInputPaused();
+  };
+  nextSurvivalWave: GameActions['nextSurvivalWave'] = () => {
+    const s = uiStore.getState();
+    if (s.playMode !== 'survival' || s.survivalOver) return;
+    const nextWaveNum = s.survivalWave + 1;
+    const waveDef = getSurvivalWave(nextWaveNum);
+    const healedHp = Math.min(s.playerMaxHp, Math.max(1, s.playerHp) + waveDef.healAmount);
+    this.rewind();
+    uiStore.setState({
+      survivalWave: nextWaveNum,
+      disaster: waveDef.disaster,
+      strength: waveDef.strength,
+      playerHp: healedHp,
+      survivalLastReward: 0,
+      survivalOver: false,
+      survivalFailReason: null,
+    });
+  };
+  restartSurvival: GameActions['restartSurvival'] = () => {
+    this.startPlayMode('survival');
   };
 
   // ------------------------------------------------------------ disaster lifecycle (also debug API)
@@ -426,10 +1013,17 @@ export class Game implements GameActions, GameDebugApi {
   async startDisaster(type: DisasterType, seed = 1, strength: Strength = DEFAULT_STRENGTH): Promise<void> {
     this.ensureBuildMode();
     const token = ++this.runToken;
-    uiStore.setState({ disaster: type, strength, playerHp: uiStore.getState().playerMaxHp });
+    const s0 = uiStore.getState();
+    uiStore.setState({
+      disaster: type,
+      strength,
+      survivalOver: false,
+      survivalFailReason: null,
+      playerHp: s0.playMode === 'survival' && s0.levelId === null ? s0.playerHp : s0.playerMaxHp,
+    });
     this.build.setEnabled(false);
     let options: SimOptions | undefined;
-    if (uiStore.getState().levelId === null) {
+    if (s0.levelId === null && s0.playMode !== 'survival') {
       const active = modStore.getState().active;
       options = {
         customMaterials: active.blockMap,
@@ -448,10 +1042,14 @@ export class Game implements GameActions, GameDebugApi {
     this.physics.stop();
     this.build.resetMeshes();
     this.build.highlight(null);
-    const fp = uiStore.getState().firstPerson;
-    this.build.setEnabled(!fp);
-    uiStore.setState({ playerHp: uiStore.getState().playerMaxHp });
-    if (fp && this.firstPerson.getFeetPosition()[1] < -2) {
+    this.build.setEnabled(true);
+    const s0 = uiStore.getState();
+    uiStore.setState({
+      playerHp: s0.playMode === 'survival' && s0.levelId === null ? s0.playerHp : s0.playerMaxHp,
+      survivalOver: false,
+      survivalFailReason: null,
+    });
+    if (this.firstPerson.getFeetPosition()[1] < -2) {
       this.firstPerson.spawn(this.currentBlockCenters());
     }
     this.scene.setWaterLevel(WATER_HIDDEN);
@@ -499,6 +1097,7 @@ export class Game implements GameActions, GameDebugApi {
     this.runToken++;
     this.physics.stop();
     this.cleanups.forEach((c) => c());
+    this.gamepad.dispose();
     this.firstPerson.dispose();
     this.build.dispose();
     this.scene.dispose();

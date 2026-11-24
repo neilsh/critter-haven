@@ -8,10 +8,21 @@ import type {
   Strength,
   ToolType,
 } from './blueprint';
+import type { ArmorId, GearId, GearSlot, WeaponId } from './gear';
 import type { GameMod } from '../mods/mods';
+
+export type PlayMode = 'creative' | 'survival';
 
 /** Everything the HUD renders. Written by the engine side, read by React. */
 export interface UIState {
+  playMode: PlayMode;
+  menuOpen: boolean;
+  hasStarted: boolean;
+  survivalWave: number;
+  survivalBestWave: number;
+  survivalOver: boolean;
+  survivalFailReason: string | null;
+  survivalLastReward: number;
   tool: ToolType;
   material: MaterialType;
   mirrorX: boolean;
@@ -34,12 +45,19 @@ export interface UIState {
   points: number;
   /** Materials/tech blocks currently unlocked for building. */
   unlockedMaterials: MaterialType[];
+  /** Quick-builder presets currently unlocked. */
+  unlockedPresets: PresetName[];
+  /** First-person gear (armor & weapons) currently unlocked. */
+  unlockedGear: GearId[];
+  equippedArmor: ArmorId | null;
+  equippedWeapon: WeaponId | null;
   /** Id of the first piece that broke in the current run, for the HUD and highlight. */
   firstBrokenId: string | null;
   muted: boolean;
   canUndo: boolean;
   azimuth: Azimuth;
   firstPerson: boolean;
+  gamepadConnected: boolean;
   playerHp: number;
   playerMaxHp: number;
   /** Incremented whenever the player takes a sharp hit (triggers HUD flash). */
@@ -57,6 +75,14 @@ export interface GameActions {
   selectLevel(id: string | null): void;
   /** Spends points to unlock a tech block; returns true when newly unlocked. */
   unlockMaterial(m: MaterialType): boolean;
+  /** Spends points to unlock a quick-builder preset; returns true when newly unlocked. */
+  unlockPreset(p: PresetName): boolean;
+  /** Spends points to unlock first-person armor or weapon; returns true when newly unlocked. */
+  unlockGear(id: GearId): boolean;
+  /** Equips or unequips an owned armor or weapon in its slot. */
+  equipGear(id: GearId | null, slot: GearSlot): void;
+  /** Fires the equipped first-person weapon, if any and off cooldown. */
+  fireWeapon(): void;
   toggleMod(id: string): void;
   saveMod(mod: GameMod): void;
   deleteMod(id: string): void;
@@ -70,4 +96,9 @@ export interface GameActions {
   setFirstPerson(on: boolean): void;
   setMuted(muted: boolean): void;
   setModalOpen(open: boolean): void;
+  openMenu(): void;
+  resumeGame(): void;
+  startPlayMode(mode: PlayMode): void;
+  nextSurvivalWave(): void;
+  restartSurvival(): void;
 }

@@ -17,10 +17,17 @@ export type BuiltinMaterialType =
   | 'stone'
   | 'bamboo'
   | 'foam'
+  | 'door'
+  | 'rubber'
   | 'anchor'
+  | 'pontoon'
   | 'steel'
+  | 'carbon'
   | 'shield'
-  | 'laser';
+  | 'titanium'
+  | 'laser'
+  | 'magnet'
+  | 'diamond';
 export type MaterialType = BuiltinMaterialType | (string & {});
 
 export type BuiltinDisasterType =
@@ -65,6 +72,8 @@ export interface MaterialDef {
   buoyancy: number;
   /** Point cost in the unlock shop; omitted means unlocked from the start. */
   cost?: number;
+  /** Shop filter category for unlockable items. */
+  shopCategory?: 'structural' | 'defense';
   /** Short kid-friendly shop description. */
   description?: string;
   /** Multiplier applied to foundation anchor break limits for ground blocks. */
@@ -110,6 +119,18 @@ export const MATERIALS: Record<BuiltinMaterialType, MaterialDef> = {
     maxStress: 0.5,
     buoyancy: 3.0,
   },
+  rubber: {
+    id: 'rubber',
+    label: 'Rubber',
+    color: 0xff7043,
+    density: 0.7,
+    stiffness: 0.45,
+    maxStress: 2.2,
+    buoyancy: 1.5,
+    cost: 100,
+    shopCategory: 'structural',
+    description: 'Super-stretchy shock absorber that bends instead of snapping.',
+  },
   anchor: {
     id: 'anchor',
     label: 'Anchor',
@@ -120,7 +141,20 @@ export const MATERIALS: Record<BuiltinMaterialType, MaterialDef> = {
     buoyancy: 0.0,
     anchorMultiplier: 3.0,
     cost: 150,
+    shopCategory: 'defense',
     description: 'Magnetic base that grips the island 3x tighter.',
+  },
+  pontoon: {
+    id: 'pontoon',
+    label: 'Pontoon',
+    color: 0xffca28,
+    density: 0.25,
+    stiffness: 1.1,
+    maxStress: 1.8,
+    buoyancy: 3.8,
+    cost: 200,
+    shopCategory: 'structural',
+    description: 'Tough inflatable float block that rides out big floods.',
   },
   steel: {
     id: 'steel',
@@ -131,7 +165,20 @@ export const MATERIALS: Record<BuiltinMaterialType, MaterialDef> = {
     maxStress: 2.6,
     buoyancy: 0.0,
     cost: 250,
+    shopCategory: 'structural',
     description: 'Ultra-tough metal for heavy frames and braces.',
+  },
+  carbon: {
+    id: 'carbon',
+    label: 'Carbon',
+    color: 0x37474f,
+    density: 0.35,
+    stiffness: 2.2,
+    maxStress: 2.4,
+    buoyancy: 0.8,
+    cost: 300,
+    shopCategory: 'structural',
+    description: 'Featherlight space-age weave — super strong for tall towers.',
   },
   shield: {
     id: 'shield',
@@ -143,7 +190,21 @@ export const MATERIALS: Record<BuiltinMaterialType, MaterialDef> = {
     buoyancy: 0.2,
     special: 'shield',
     cost: 350,
+    shopCategory: 'defense',
     description: 'Projects a glowing aura that reinforces nearby blocks.',
+  },
+  titanium: {
+    id: 'titanium',
+    label: 'Titanium',
+    color: 0xb0bec5,
+    density: 1.8,
+    stiffness: 2.6,
+    maxStress: 3.4,
+    buoyancy: 0.0,
+    anchorMultiplier: 2.0,
+    cost: 450,
+    shopCategory: 'structural',
+    description: 'Lighter than steel and way tougher, with built-in ground grip.',
   },
   laser: {
     id: 'laser',
@@ -155,12 +216,59 @@ export const MATERIALS: Record<BuiltinMaterialType, MaterialDef> = {
     buoyancy: 0.2,
     special: 'laser',
     cost: 500,
+    shopCategory: 'defense',
     description: 'Zaps incoming fireballs, snow, hail, raiders, and meteors.',
+  },
+  magnet: {
+    id: 'magnet',
+    label: 'Magnet',
+    color: 0x7e57c2,
+    density: 2.2,
+    stiffness: 2.4,
+    maxStress: 2.8,
+    buoyancy: 0.0,
+    anchorMultiplier: 5.0,
+    cost: 600,
+    shopCategory: 'defense',
+    description: 'Super-powered electromagnet that locks onto the island 5x tighter.',
+  },
+  diamond: {
+    id: 'diamond',
+    label: 'Diamond',
+    color: 0x4dd0e1,
+    density: 2.4,
+    stiffness: 3.0,
+    maxStress: 4.5,
+    buoyancy: 0.0,
+    special: 'shield',
+    cost: 800,
+    shopCategory: 'defense',
+    description: 'Nearly unbreakable crystal core that also projects a protective shield.',
+  },
+  door: {
+    id: 'door',
+    label: 'Door',
+    color: 0x8d5524,
+    density: 0.65,
+    stiffness: 1.0,
+    maxStress: 1.1,
+    buoyancy: 1.2,
   },
 };
 
-export const BASE_MATERIALS: BuiltinMaterialType[] = ['wood', 'stone', 'bamboo', 'foam'];
-export const UNLOCKABLE_MATERIALS: BuiltinMaterialType[] = ['anchor', 'steel', 'shield', 'laser'];
+export const BASE_MATERIALS: BuiltinMaterialType[] = ['wood', 'stone', 'bamboo', 'foam', 'door'];
+export const UNLOCKABLE_MATERIALS: BuiltinMaterialType[] = [
+  'rubber',
+  'anchor',
+  'pontoon',
+  'steel',
+  'carbon',
+  'shield',
+  'titanium',
+  'laser',
+  'magnet',
+  'diamond',
+];
 export const MATERIAL_ORDER: BuiltinMaterialType[] = [...BASE_MATERIALS, ...UNLOCKABLE_MATERIALS];
 export const DISASTER_ORDER: BuiltinDisasterType[] = [
   'earthquake',
@@ -219,7 +327,18 @@ export interface BlueprintGraph {
   struts: StrutData[];
 }
 
-export type PresetName = 'empty' | 'house' | 'tower';
+export type BasePresetName = 'empty' | 'house' | 'tower';
+export type UnlockablePresetName = 'boat' | 'base' | 'laser_tower' | 'fortress';
+export type PresetName = BasePresetName | UnlockablePresetName;
+
+export interface PresetDef {
+  id: PresetName;
+  label: string;
+  color: number;
+  cost?: number;
+  description?: string;
+  badges?: readonly string[];
+}
 
 // ---------------------------------------------------------------- helpers
 
@@ -310,6 +429,26 @@ function towerPreset(): BlueprintGraph {
   return { version: 1, blocks: [0, 1, 2, 3].map((y) => block(3, y, 3, 'wood')), struts: [] };
 }
 
+function addOuterWallBraces(
+  struts: StrutData[],
+  x0: number,
+  x1: number,
+  z0: number,
+  z1: number,
+  y0: number,
+  y1: number,
+  material: MaterialType,
+) {
+  for (const z of [z0, z1]) {
+    struts.push(strut([x0, y0, z], [x1, y1, z], material));
+    struts.push(strut([x1, y0, z], [x0, y1, z], material));
+  }
+  for (const x of [x0, x1]) {
+    struts.push(strut([x, y0, z0], [x, y1, z1], material));
+    struts.push(strut([x, y0, z1], [x, y1, z0], material));
+  }
+}
+
 /**
  * Compact house, 2x2 footprint and 3 layers tall: stone ground floor, wood upper floor, wood cap,
  * and bamboo diagonal cross-braces over the bottom two layers of all four walls. Designed to
@@ -324,24 +463,156 @@ function housePreset(): BlueprintGraph {
       blocks.push(block(x, 2, z, 'wood')); // capped top
     }
   const struts: StrutData[] = [];
-  const [x0, x1, z0, z1, yTop] = [3, 5, 3, 5, 2];
-  // z-facing walls
-  for (const z of [z0, z1]) {
-    struts.push(strut([x0, 0, z], [x1, yTop, z], 'bamboo'));
-    struts.push(strut([x1, 0, z], [x0, yTop, z], 'bamboo'));
-  }
-  // x-facing walls
-  for (const x of [x0, x1]) {
-    struts.push(strut([x, 0, z0], [x, yTop, z1], 'bamboo'));
-    struts.push(strut([x, 0, z1], [x, yTop, z0], 'bamboo'));
-  }
+  addOuterWallBraces(struts, 3, 5, 3, 5, 0, 2, 'bamboo');
   return { version: 1, blocks, struts };
+}
+
+/** Floating pontoon boat with a wood cabin, working door, mast, and bamboo braces. */
+function boatPreset(): BlueprintGraph {
+  const blocks: BlockData[] = [];
+  for (const x of [2, 3, 4, 5]) {
+    for (const z of [3, 4]) {
+      blocks.push(block(x, 0, z, 'pontoon'));
+    }
+  }
+  // Cabin walls with an open interior at [4, 1, 3] and a door at [3, 1, 4]
+  for (const [x, z, mat] of [
+    [2, 3, 'wood'],
+    [2, 4, 'wood'],
+    [3, 3, 'wood'],
+    [3, 4, 'door'],
+    [4, 4, 'wood'],
+    [5, 3, 'wood'],
+    [5, 4, 'wood'],
+  ] as const) {
+    blocks.push(block(x, 1, z, mat));
+  }
+  blocks.push(block(3, 2, 3, 'bamboo'), block(3, 3, 3, 'bamboo'));
+  const struts: StrutData[] = [];
+  addOuterWallBraces(struts, 2, 6, 3, 5, 0, 2, 'bamboo');
+  return { version: 1, blocks, struts };
+}
+
+const isBoxCorner = (x: number, z: number) => (x === 2 || x === 5) && (z === 2 || z === 5);
+const isBoxEdge = (x: number, z: number) => x === 2 || x === 5 || z === 2 || z === 5;
+
+/** Walk-in steel bunker with anchor corners, door entrance, and roof shield projector. */
+function basePreset(): BlueprintGraph {
+  const blocks: BlockData[] = [];
+  for (const x of [2, 3, 4, 5]) {
+    for (const z of [2, 3, 4, 5]) {
+      if (isBoxEdge(x, z)) {
+        const y0Mat: MaterialType = x === 3 && z === 5 ? 'door' : isBoxCorner(x, z) ? 'anchor' : 'stone';
+        blocks.push(block(x, 0, z, y0Mat));
+        blocks.push(block(x, 1, z, 'steel'));
+      }
+      blocks.push(block(x, 2, z, x === 3 && z === 3 ? 'shield' : 'steel'));
+    }
+  }
+  const struts: StrutData[] = [];
+  addOuterWallBraces(struts, 2, 6, 2, 6, 0, 2, 'steel');
+  return { version: 1, blocks, struts };
+}
+
+/** Braced 5-story defense spire with anchor base, shield core, carbon upper frame, and 4 lasers. */
+function laserTowerPreset(): BlueprintGraph {
+  const blocks: BlockData[] = [];
+  for (const x of [3, 4]) {
+    for (const z of [3, 4]) {
+      blocks.push(block(x, 0, z, 'anchor'));
+      blocks.push(block(x, 1, z, 'steel'));
+      blocks.push(block(x, 2, z, x === 3 && z === 3 ? 'shield' : 'steel'));
+      blocks.push(block(x, 3, z, 'carbon'));
+      blocks.push(block(x, 4, z, 'laser'));
+    }
+  }
+  const struts: StrutData[] = [];
+  addOuterWallBraces(struts, 3, 5, 3, 5, 0, 2, 'steel');
+  addOuterWallBraces(struts, 3, 5, 3, 5, 2, 4, 'steel');
+  return { version: 1, blocks, struts };
+}
+
+/** Apex fortress with magnet corners, titanium armor, diamond core, walk-in door, and 4 lasers. */
+function fortressPreset(): BlueprintGraph {
+  const blocks: BlockData[] = [];
+  for (const x of [2, 3, 4, 5]) {
+    for (const z of [2, 3, 4, 5]) {
+      if (isBoxEdge(x, z)) {
+        const y0Mat: MaterialType = x === 3 && z === 5 ? 'door' : isBoxCorner(x, z) ? 'magnet' : 'titanium';
+        blocks.push(block(x, 0, z, y0Mat));
+        blocks.push(block(x, 1, z, x === 4 && z === 2 ? 'diamond' : 'titanium'));
+      }
+      blocks.push(block(x, 2, z, 'titanium'));
+      if (isBoxCorner(x, z)) {
+        blocks.push(block(x, 3, z, 'laser'));
+      }
+    }
+  }
+  const struts: StrutData[] = [];
+  addOuterWallBraces(struts, 2, 6, 2, 6, 0, 2, 'titanium');
+  return { version: 1, blocks, struts };
+}
+
+export const PRESET_DEFS: Record<PresetName, PresetDef> = {
+  empty: { id: 'empty', label: 'Empty', color: 0x94a3b8 },
+  house: { id: 'house', label: 'House', color: 0xc58b4c },
+  tower: { id: 'tower', label: 'Tower', color: 0xd97706 },
+  boat: {
+    id: 'boat',
+    label: 'Boat',
+    color: 0x0284c7,
+    cost: 150,
+    description: 'Floating pontoon boat with a cabin door that rides right over floods.',
+    badges: ['Floats', 'Door'],
+  },
+  base: {
+    id: 'base',
+    label: 'Base',
+    color: 0x475569,
+    cost: 250,
+    description: 'Walk-in steel bunker with anchor corners, a working door, and a shield roof.',
+    badges: ['Walk-in Door', 'Shield'],
+  },
+  laser_tower: {
+    id: 'laser_tower',
+    label: 'Laser Tower',
+    color: 0xef4444,
+    cost: 400,
+    description: 'Braced 5-story defense spire with a shield core and 4 rooftop laser turrets.',
+    badges: ['4 Lasers', 'Shield'],
+  },
+  fortress: {
+    id: 'fortress',
+    label: 'Fortress',
+    color: 0x0891b2,
+    cost: 650,
+    description: 'Apex castle with magnet anchors, titanium walls, a diamond core, a door, and 4 lasers.',
+    badges: ['Walk-in Door', '4 Lasers', 'Diamond'],
+  },
+};
+
+export const BASE_PRESETS: readonly BasePresetName[] = ['empty', 'house', 'tower'];
+export const UNLOCKABLE_PRESETS: readonly UnlockablePresetName[] = [
+  'boat',
+  'base',
+  'laser_tower',
+  'fortress',
+];
+export const PRESET_ORDER: readonly PresetName[] = [...BASE_PRESETS, ...UNLOCKABLE_PRESETS];
+
+const PRESET_SET = new Set<string>(PRESET_ORDER);
+export function isPresetName(s: string): s is PresetName {
+  return PRESET_SET.has(s);
 }
 
 export const PRESETS: Record<PresetName, () => BlueprintGraph> = {
   empty: emptyGraph,
   tower: towerPreset,
   house: housePreset,
+  boat: boatPreset,
+  base: basePreset,
+  laser_tower: laserTowerPreset,
+  fortress: fortressPreset,
 };
 
 // ---------------------------------------------------------------- telemetry & debug API

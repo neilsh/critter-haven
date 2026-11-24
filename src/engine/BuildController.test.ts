@@ -331,4 +331,63 @@ describe('BuildController instancing', () => {
     mesh.getMatrixAt(0, m);
     expect(new THREE.Vector3().setFromMatrixPosition(m).y).toBe(1);
   });
+
+  it('supports First-Person crosshair building and erasing while ignoring raw pointer clicks', () => {
+    const { bc, fire, screen, scene } = setup();
+    bc.setCrosshairMode(true);
+
+    // Raw pointer clicks are ignored in crosshair mode (pointer is used for look drag)
+    const p = screen([0, 0, 0]);
+    fire('pointerdown', p[0], p[1]);
+    fire('pointerup', p[0], p[1]);
+    expect(bc.getGraph().blocks).toHaveLength(0);
+
+    // Aim First-Person camera at cell [4, 0, 4] center on the island and place + erase via crosshair
+    scene.camera.position.set(1, 1.55, 7);
+    scene.camera.lookAt(1, 0, 1);
+    scene.camera.updateMatrixWorld();
+
+    expect(bc.applyToolAtCrosshair()).toBe(true);
+    expect(bc.getGraph().blocks).toHaveLength(1);
+
+    expect(bc.eraseAtCrosshair()).toBe(true);
+    expect(bc.getGraph().blocks).toHaveLength(0);
+  });
+
+  it('places a door block that opens and closes when clicked and clears open state on erase', () => {
+    const { bc, scene } = setup();
+    bc.setCrosshairMode(true);
+    bc.setMaterial('door');
+    scene.camera.position.set(1, 1.55, 7);
+    scene.camera.lookAt(1, 0, 1);
+    scene.camera.updateMatrixWorld();
+
+    expect(bc.applyToolAtCrosshair()).toBe(true);
+    const id = 'b:4,0,4';
+    expect(bc.getGraph().blocks).toHaveLength(1);
+    expect(bc.getGraph().blocks[0]?.material).toBe('door');
+    expect(bc.isDoorOpen(id)).toBe(false);
+
+    // Click the door -> opens and shrinks/slides to the side
+    expect(bc.applyToolAtCrosshair()).toBe(true);
+    expect(bc.isDoorOpen(id)).toBe(true);
+    const h = bc.meshes.blocks.get(id)!;
+    expect(h.scale.x).toBeLessThan(0.5);
+
+    // Aim at the open door leaf and click -> closes
+    scene.camera.lookAt(h.position.x, h.position.y, h.position.z);
+    scene.camera.updateMatrixWorld();
+    expect(bc.applyToolAtCrosshair()).toBe(true);
+    expect(bc.isDoorOpen(id)).toBe(false);
+    expect(h.scale.x).toBe(1);
+
+    // Open again, then erase -> open state is pruned
+    expect(bc.applyToolAtCrosshair()).toBe(true);
+    expect(bc.isDoorOpen(id)).toBe(true);
+    scene.camera.lookAt(h.position.x, h.position.y, h.position.z);
+    scene.camera.updateMatrixWorld();
+    expect(bc.eraseAtCrosshair()).toBe(true);
+    expect(bc.getGraph().blocks).toHaveLength(0);
+    expect(bc.isDoorOpen(id)).toBe(false);
+  });
 });

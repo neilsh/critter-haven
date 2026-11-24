@@ -1,21 +1,40 @@
 import { describe, expect, it } from 'vitest';
-import { BASE_MATERIALS, MATERIALS } from '../types/blueprint';
+import {
+  BASE_MATERIALS,
+  BASE_PRESETS,
+  MATERIALS,
+  PRESET_DEFS,
+  UNLOCKABLE_MATERIALS,
+  UNLOCKABLE_PRESETS,
+} from '../types/blueprint';
+import { GEAR, GEAR_ORDER } from '../types/gear';
 import { LEVELS } from './levels';
 import {
   CLEAR_BONUS,
+  GEAR_KEY,
   POINTS_PER_STAR,
+  PRESETS_KEY,
   PROGRESS_KEY,
   SHOP_KEY,
+  SURVIVAL_KEY,
   computeAvailablePoints,
   computeSpentPoints,
   computeTotalPoints,
   computeUnlocked,
   loadBest,
+  loadGear,
+  loadSurvival,
   loadUnlockedMaterials,
+  loadUnlockedPresets,
   recordResult,
   saveBest,
+  saveGear,
+  saveSurvival,
   saveUnlockedMaterials,
+  saveUnlockedPresets,
+  tryUnlockGear,
   tryUnlockMaterial,
+  tryUnlockPreset,
   type StorageLike,
 } from './progress';
 
@@ -143,5 +162,144 @@ describe('points and shop unlocks', () => {
       ...BASE_MATERIALS,
       'laser',
     ]);
+  });
+
+  it('gives every shop unlockable a positive cost, description, category, and ascending price order', () => {
+    expect(UNLOCKABLE_MATERIALS.length).toBeGreaterThanOrEqual(10);
+    let prevCost = 0;
+    for (const m of UNLOCKABLE_MATERIALS) {
+      const def = MATERIALS[m];
+      expect(def.cost).toBeGreaterThan(0);
+      expect(def.description?.trim().length).toBeGreaterThan(0);
+      expect(def.shopCategory === 'structural' || def.shopCategory === 'defense').toBe(true);
+      expect(def.cost!).toBeGreaterThanOrEqual(prevCost);
+      prevCost = def.cost!;
+    }
+  });
+
+  it('unlocks new shop items at their point tiers and gates diamond at 800 pts', () => {
+    // first (3*100 + 50 = 350) -> enough for rubber (100) and pontoon (200), not diamond (800)
+    const oneLevel = { [first.id]: 3 as const };
+    const buyRubber = tryUnlockMaterial(LEVELS, oneLevel, BASE_MATERIALS, 'rubber');
+    expect(buyRubber.ok).toBe(true);
+    expect(buyRubber.unlocked).toContain('rubber');
+
+    const buyPontoon = tryUnlockMaterial(LEVELS, oneLevel, buyRubber.unlocked, 'pontoon');
+    expect(buyPontoon.ok).toBe(true);
+    expect(buyPontoon.unlocked).toContain('pontoon');
+    expect(computeAvailablePoints(LEVELS, oneLevel, buyPontoon.unlocked)).toBe(50);
+
+    expect(tryUnlockMaterial(LEVELS, oneLevel, BASE_MATERIALS, 'diamond').ok).toBe(false);
+
+    // Three cleared 3-star levels (3 * 350 = 1050 pts) -> diamond unlocks
+    const threeLevels = { [first.id]: 3 as const, [second.id]: 3 as const, [third.id]: 3 as const };
+    const buyDiamond = tryUnlockMaterial(LEVELS, threeLevels, BASE_MATERIALS, 'diamond');
+    expect(buyDiamond.ok).toBe(true);
+    expect(buyDiamond.unlocked).toContain('diamond');
+  });
+
+  it('validates first-person gear metadata, shared points pool, and gear persistence', () => {
+    expect(GEAR_ORDER).toHaveLength(7);
+    for (const id of GEAR_ORDER) {
+      expect(GEAR[id].cost).toBeGreaterThan(0);
+      expect(GEAR[id].description.trim().length).toBeGreaterThan(0);
+    }
+
+    // first level 3 stars = 350 pts
+    const best = { [first.id]: 3 as const };
+    // Spend 100 on rubber material + 100 on hard_hat + 100 on slingshot = 300 pts spent, 50 remaining
+    const matRes = tryUnlockMaterial(LEVELS, best, BASE_MATERIALS, 'rubber');
+    expect(matRes.ok).toBe(true);
+    const hatRes = tryUnlockGear(LEVELS, best, matRes.unlocked, [], 'hard_hat');
+    expect(hatRes.ok).toBe(true);
+    const slingRes = tryUnlockGear(LEVELS, best, matRes.unlocked, hatRes.unlocked, 'slingshot');
+    expect(slingRes.ok).toBe(true);
+    expect(computeSpentPoints(matRes.unlocked, slingRes.unlocked)).toBe(300);
+    expect(computeAvailablePoints(LEVELS, best, matRes.unlocked, slingRes.unlocked)).toBe(50);
+
+    // Duplicate unlock or insufficient points fails
+    expect(tryUnlockGear(LEVELS, best, matRes.unlocked, slingRes.unlocked, 'hard_hat').ok).toBe(false);
+    expect(tryUnlockGear(LEVELS, best, matRes.unlocked, slingRes.unlocked, 'knight_armor').ok).toBe(false);
+
+    // Persistence round-trip & corrupt/unowned sanitization
+    const storage = fakeStorage();
+    saveGear({ unlocked: ['hard_hat', 'slingshot'], armor: 'hard_hat', weapon: 'slingshot' }, storage);
+    expect(loadGear(storage)).toEqual({
+      unlocked: ['hard_hat', 'slingshot'],
+      armor: 'hard_hat',
+      weapon: 'slingshot',
+    });
+
+    expect(loadGear(fakeStorage('{bad', GEAR_KEY))).toEqual({ unlocked: [], armor: null, weapon: null });
+    expect(
+      loadGear(
+        fakeStorage(
+          JSON.stringify({
+            unlocked: ['nope', 'slingshot'],
+            armor: 'mech_suit', // not owned -> dropped
+            weapon: 'slingshot',
+          }),
+          GEAR_KEY,
+        ),
+      ),
+    ).toEqual({ unlocked: ['slingshot'], armor: null, weapon: 'slingshot' });
+  });
+
+  it('validates quick-builder preset metadata, shared points pool, and persistence', () => {
+    expect(UNLOCKABLE_PRESETS).toEqual(['boat', 'base', 'laser_tower', 'fortress']);
+    let prevCost = 0;
+    for (const p of UNLOCKABLE_PRESETS) {
+      const def = PRESET_DEFS[p];
+      expect(def.cost).toBeGreaterThan(0);
+      expect(def.description?.trim().length).toBeGreaterThan(0);
+      expect(def.badges?.length).toBeGreaterThan(0);
+      expect(def.cost!).toBeGreaterThanOrEqual(prevCost);
+      prevCost = def.cost!;
+    }
+
+    // 350 pts -> buy rubber (100) + hard_hat (100) + boat (150) = 350 pts spent, 0 remaining
+    const best = { [first.id]: 3 as const };
+    const matRes = tryUnlockMaterial(LEVELS, best, BASE_MATERIALS, 'rubber');
+    const gearRes = tryUnlockGear(LEVELS, best, matRes.unlocked, [], 'hard_hat');
+    const boatRes = tryUnlockPreset(LEVELS, best, matRes.unlocked, gearRes.unlocked, BASE_PRESETS, 'boat');
+    expect(boatRes.ok).toBe(true);
+    expect(boatRes.unlocked).toContain('boat');
+    expect(computeSpentPoints(matRes.unlocked, gearRes.unlocked, boatRes.unlocked)).toBe(350);
+    expect(computeAvailablePoints(LEVELS, best, matRes.unlocked, gearRes.unlocked, boatRes.unlocked)).toBe(0);
+
+    // Duplicate or unaffordable unlock fails
+    expect(
+      tryUnlockPreset(LEVELS, best, matRes.unlocked, gearRes.unlocked, boatRes.unlocked, 'boat').ok,
+    ).toBe(false);
+    expect(tryUnlockPreset(LEVELS, best, BASE_MATERIALS, [], BASE_PRESETS, 'laser_tower').ok).toBe(false);
+
+    // Round-trip & corrupt storage handling
+    const storage = fakeStorage();
+    saveUnlockedPresets([...BASE_PRESETS, 'base'], storage);
+    expect(loadUnlockedPresets(storage)).toEqual([...BASE_PRESETS, 'base']);
+    expect(loadUnlockedPresets(fakeStorage('{bad', PRESETS_KEY))).toEqual(BASE_PRESETS);
+    expect(loadUnlockedPresets(fakeStorage(JSON.stringify(['bogus', 42, 'fortress']), PRESETS_KEY))).toEqual([
+      ...BASE_PRESETS,
+      'fortress',
+    ]);
+  });
+
+  it('persists survival records safely and includes survival bonusPoints in shop spending', () => {
+    const storage = fakeStorage();
+    saveSurvival({ bestWave: 4, bonusPoints: 180 }, storage);
+    expect(loadSurvival(storage)).toEqual({ bestWave: 4, bonusPoints: 180 });
+
+    // Corrupt, negative, and non-integer data sanitize to 0
+    expect(loadSurvival(fakeStorage('{bad', SURVIVAL_KEY))).toEqual({ bestWave: 0, bonusPoints: 0 });
+    expect(loadSurvival(fakeStorage('[1,2]', SURVIVAL_KEY))).toEqual({ bestWave: 0, bonusPoints: 0 });
+    expect(
+      loadSurvival(fakeStorage(JSON.stringify({ bestWave: -2, bonusPoints: 12.5 }), SURVIVAL_KEY)),
+    ).toEqual({ bestWave: 0, bonusPoints: 0 });
+
+    // Even with 0 level stars, bonusPoints fund Shop purchases
+    expect(computeAvailablePoints(LEVELS, {}, BASE_MATERIALS, [], BASE_PRESETS, 150)).toBe(150);
+    expect(tryUnlockMaterial(LEVELS, {}, BASE_MATERIALS, 'anchor', [], BASE_PRESETS, 150).ok).toBe(true);
+    expect(tryUnlockGear(LEVELS, {}, BASE_MATERIALS, [], 'hard_hat', BASE_PRESETS, 100).ok).toBe(true);
+    expect(tryUnlockPreset(LEVELS, {}, BASE_MATERIALS, [], BASE_PRESETS, 'boat', 150).ok).toBe(true);
   });
 });
